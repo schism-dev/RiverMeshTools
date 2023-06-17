@@ -223,7 +223,7 @@ def merge_maps(mapfile_glob_str, merged_fname):
             total_map += map
         total_map.writer(merged_fname)
     else:
-        print(f'warning: outputs do not exist: {mapfile_glob_str}, abort writing to map')
+        # print(f'warning: outputs do not exist: {mapfile_glob_str}, abort writing to map')
         return None
 
     return total_map

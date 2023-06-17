@@ -566,8 +566,13 @@ def snap_closeby_points(pt_xyz:np.ndarray):
 def snap_closeby_points_global(pt_xyz:np.ndarray, reso_ratio=0.2, n_nei=30):
     '''
     Snap closeby points to the same location.
+    A double loop is used for each point,
+    because we need to update the xyz array in place upon snapping
     Points are processed in two groups to improve efficiency.
     '''
+
+    # save pt_xyz to file for debugging
+    np.savetxt('pt_xyz.txt', pt_xyz, fmt='%.8f')
 
     xyz = deepcopy(pt_xyz)
     npts = xyz.shape[0]
@@ -577,31 +582,38 @@ def snap_closeby_points_global(pt_xyz:np.ndarray, reso_ratio=0.2, n_nei=30):
     nsnap = 0
 
     # Two groups of points:
-    # I) > n_nei points within the search radius
+    # Type-I points:
+    # The last of n_nei neighbors is within the search radius,
+    # so there could be additional closeby neighbors not included in the n_nei neighbors
+    # so we need to loop trhough all points to find them
+    # Since there should not be many of them, the efficiency is not a concern
     points_with_many_neighbors = (distances[:, -1] < xyz[:, 2]*reso_ratio)
     print(f'{sum(points_with_many_neighbors)} vertices marked for cleaning I')
     nsnap += sum(points_with_many_neighbors)
     if sum(points_with_many_neighbors) > 0:
-        points_with_many_neighbors = np.atleast_2d(np.argwhere(points_with_many_neighbors)).ravel()
+        points_with_many_neighbors = np.where(points_with_many_neighbors)[0]
         for i in points_with_many_neighbors:
             nearby_points = abs((xyz[i, 0]+1j*xyz[i, 1])-(xyz[:, 0]+1j*xyz[:, 1])) < xyz[i, 2]
-            target = min(np.argwhere(nearby_points).squeeze())  # always snap to the least index to assure consistency
+            target = min(np.where(nearby_points)[0])  # always snap to the least index to assure consistency
             xyz[nearby_points, :] = xyz[target, :]
 
-    # II) <=  n_nei points within the search radius
-    # most points fall in this category, so we only need to deal with n_nei neighbors
+    # Type-II points:
+    # The last of n_nei neighbors is outside the search radius and the closest neighbor is within the search radius,
+    # so we only need to deal with at most n_nei neighbors.
+    # Although most points fall in this category, we only loop through n_nei neighbors for each point
     nbrs = NearestNeighbors(n_neighbors=min(npts, n_nei)).fit(xyz)
     distances, indices = nbrs.kneighbors(xyz)
     distances[distances==0.0] = 9999
+    # for each Type-II point, find its close-by neighbors if any
     points_with_few_neighbors = (np.min(distances, axis=1) <= xyz[:, 2]*reso_ratio)*(distances[:, -1] >= xyz[:, 2]*reso_ratio)
     nsnap += sum(points_with_few_neighbors)
     print(f'{sum(points_with_few_neighbors)} vertices marked for cleaning II')
     if sum(points_with_few_neighbors) > 0:
-        points_with_few_neighbors = np.atleast_2d(np.argwhere(points_with_few_neighbors)).ravel()
+        points_with_few_neighbors = np.where(points_with_few_neighbors)[0]
         for i in points_with_few_neighbors:
             idx = indices[i, :]
             i_nearby = abs((xyz[i, 0]+1j*xyz[i, 1])-(xyz[idx, 0]+1j*xyz[idx, 1])) < xyz[i, 2]
-            target = min(idx[np.argwhere(i_nearby).squeeze()])  # always snap to the least index to assure consistency
+            target = min(idx[np.where(i_nearby)[0]])  # always snap to the least index to assure consistency
             xyz[idx[i_nearby], :] = xyz[target, :]
 
     return xyz, nsnap

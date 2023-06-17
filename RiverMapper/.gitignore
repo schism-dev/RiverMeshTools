@@ -1,0 +1,13 @@
+# .gitignore
+
+# Exclude the .vscode directory
+.vscode/
+
+# Exclude the __pycache__ directory
+__pycache__/
+
+# Exclude all files with the .egg-info extension
+*.egg-info/
+
+# Data for testing
+Data/
