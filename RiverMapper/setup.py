@@ -28,6 +28,7 @@ with io.open('README.md','r', encoding='utf8') as fh:
     'numpy',
     'pandas',
     'scipy',
-    'Scikit-learn'
+    'Scikit-learn',
+    'mpi4py',
   ],
 )
