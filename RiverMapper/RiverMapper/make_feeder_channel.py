@@ -9,10 +9,10 @@ from time import time
 class Feeder():
     def __init__(self, points_x:np.ndarray, points_y:np.ndarray, base_id) -> None:
         self.points_x, self.points_y = points_x, points_y
-        self.head = np.c_[np.mean(points_x[:, 0]), np.mean(points_y[:, 0])] 
+        self.head = np.c_[np.mean(points_x[:, 0]), np.mean(points_y[:, 0])]
 
         base_id = min(self.points_x.shape[1], base_id)
-        self.base = np.c_[np.mean(points_x[:, base_id]), np.mean(points_y[:, base_id])] 
+        self.base = np.c_[np.mean(points_x[:, base_id]), np.mean(points_y[:, base_id])]
 
 def find_inlets_outlets(line_map:SMS_MAP, gd:schism_grid):
     '''
@@ -52,20 +52,17 @@ if __name__ == "__main__":
 
     timer = time()
 
-    # river_centerlines_fname = f'{output_dir}/total_centerlines.map'
     rivermap_fname = f'{output_dir}/total_inner_arcs.map'
     grid_fname = '/sciclone/schism10/feiye/STOFS3D-v5/Inputs/v14/Parallel/SMS_proj/feeder/hgrid.ll'
 
-    '''
+    river_map = SMS_MAP(rivermap_fname)
+    xyz, l2g = river_map.get_xyz()
+    with open('river_map.pkl', 'wb') as file:
+        pickle.dump([river_map, xyz, l2g], file)
 
-    # river_map = SMS_MAP(rivermap_fname)
-    # xyz, l2g = river_map.get_xyz()
-    # with open('river_map.pkl', 'wb') as file:
-    #     pickle.dump([river_map, xyz, l2g], file)
+    # with open('river_map.pkl', 'rb') as file:
+    #     river_map, xyz, l2g = pickle.load(file)
 
-    with open('river_map.pkl', 'rb') as file:
-        river_map, xyz, l2g = pickle.load(file)
-    
     n_rivers = 0
     narcs_rivers = -np.ones((0, 1), dtype=int)  # number of river arcs for each river
     n = 0
@@ -89,9 +86,9 @@ if __name__ == "__main__":
 
     centerline_map = SMS_MAP(arcs=np.array(centerlines).reshape((-1, 1)))
     xyz_c, l2g_c = centerline_map.get_xyz()
-        
+
     print(f'reading river map took {time()-timer} seconds'); timer = time()
-    
+
     gd = schism_grid(grid_fname)
     # with open(grid_fname, 'rb') as file:
     #     gd = pickle.load(file)
@@ -101,12 +98,11 @@ if __name__ == "__main__":
     inlets, outlets = find_inlets_outlets(line_map=centerline_map, gd=gd)
     print(f'finding inlets/outlets took {time()-timer} seconds'); timer = time()
 
-    with open('tmp.pkl', 'wb') as file:
-        pickle.dump([river_map, centerline_map, n_rivers, narcs_rivers, gd, inlets, outlets], file)
-    '''
-
-    with open('tmp.pkl', 'rb') as file:
-       [river_map, centerline_map, n_rivers, narcs_rivers, gd, inlets, outlets] = pickle.load(file)
+    # for testing only
+    # with open('tmp.pkl', 'wb') as file:
+    #     pickle.dump([river_map, centerline_map, n_rivers, narcs_rivers, gd, inlets, outlets], file)
+    # with open('tmp.pkl', 'rb') as file:
+    #    [river_map, centerline_map, n_rivers, narcs_rivers, gd, inlets, outlets] = pickle.load(file)
 
     feeder_channel_extension = np.array([-10.0, -5.0, 0])
     i_inlet_options = [2, 1, 0]
@@ -126,7 +122,7 @@ if __name__ == "__main__":
     n_feeder = 0; n_outlet = 0
     feeders = []
     while (i < len(river_map.arcs)):
-        this_inlets = inlets[i_river]  # inlets[range(i, i+narcs_rivers[i_river])] 
+        this_inlets = inlets[i_river]  # inlets[range(i, i+narcs_rivers[i_river])]
         if this_inlets > 0:  # any(this_inlets>0)
             for i_inlet_option in i_inlet_options:
                 feeder_base_pts = np.zeros((0,3), dtype=float)
@@ -139,7 +135,7 @@ if __name__ == "__main__":
                     feeder_base_pts = np.r_[feeder_base_pts, river_map.arcs[j].points[inlet, :].reshape(1,3)]
                     feeder_follow_pts = np.r_[feeder_follow_pts, river_map.arcs[j].points[i_follow, :].reshape(-1,3)]
                 perp = np.mean(get_perpendicular_angle(line=feeder_base_pts[[1, -1], :2]))
-                width = ((feeder_base_pts[0, 0] - feeder_base_pts[1, 0])**2 + (feeder_base_pts[0, 1] - feeder_base_pts[1, 1])**2) ** 0.5 
+                width = ((feeder_base_pts[0, 0] - feeder_base_pts[1, 0])**2 + (feeder_base_pts[0, 1] - feeder_base_pts[1, 1])**2) ** 0.5
                 feeder_channel_length = feeder_channel_extension * width
 
                 xt = np.zeros((narcs_rivers[i_river], len(feeder_channel_extension)+n_follow), dtype=float)
@@ -147,17 +143,17 @@ if __name__ == "__main__":
                 for k in range(len(feeder_channel_extension)):
                     xt[:, k] = feeder_base_pts[:, 0] + feeder_channel_length[k] * np.cos(perp)
                     yt[:, k] = feeder_base_pts[:, 1] + feeder_channel_length[k] * np.sin(perp)
-                
+
                 ingrid_feeders = gd.inside_grid(np.c_[xt[:, i_inlet_option+1:len(feeder_channel_extension)].reshape(-1, 1),
                                                       yt[:, i_inlet_option+1:len(feeder_channel_extension)].reshape(-1, 1)])
                 if sum(ingrid_feeders) == 0:
                     break  # found valid feeder; the worse case is non of the i_inlet_option works, in which case the last one is kept
                 print(f'unclean connection at arc {i+1}')
-                
+
             if n_follow > 0:
                 xt[:, -n_follow:] = feeder_follow_pts[:, 0].reshape(-1, n_follow)
                 yt[:, -n_follow:] = feeder_follow_pts[:, 1].reshape(-1, n_follow)
-            
+
             for k in range(xt.shape[0]):
                 feeder_arcs[n_feeder] = SMS_ARC(points=np.c_[xt[k, :], yt[k, :]], src_prj='epsg:4326')
                 n_feeder += 1
@@ -168,7 +164,7 @@ if __name__ == "__main__":
 
             feeders.append(Feeder(points_x=xt, points_y=yt, base_id=len(feeder_channel_extension)+1))
 
-        this_outlets = outlets[i_river]  # outlets[range(i, i+narcs_rivers[i_river])] 
+        this_outlets = outlets[i_river]  # outlets[range(i, i+narcs_rivers[i_river])]
         if this_outlets>0: # any(this_outlets>0):
             outlet_base_pts = np.zeros((0,3), dtype=float)
             outlet = this_outlets  # max(0, np.min(this_outlets[this_outlets!=-1]))
@@ -179,7 +175,7 @@ if __name__ == "__main__":
 
         i += narcs_rivers[i_river]
         i_river += 1
-    
+
     if len(feeders) != n_inlets:
         raise Exception("Inconsistent number of inlets and feeder channels")
 
@@ -207,8 +203,8 @@ if __name__ == "__main__":
 
     with open(f'{output_dir}/feeder_arrays.pkl', 'wb') as file:
         pickle.dump([feeder_arrays_x, feeder_arrays_y], file)
-    
+
     SMS_MAP(detached_nodes=np.r_[feeder_heads, feeder_bases]).writer(filename=f'{output_dir}/feeder_hb.map')
-    
+
     pass
 

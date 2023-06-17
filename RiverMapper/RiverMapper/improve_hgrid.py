@@ -1,4 +1,3 @@
-# %%
 from pylib import schism_grid, grd2sms, proj_pts, read_schism_bpfile
 # pylib is a python library that handles many schism-related file manipulations by Dr. Zhengui Wang
 # , which can be installed by "pip install git+https://github.com/wzhengui/pylibs.git"

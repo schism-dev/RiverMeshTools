@@ -1,18 +1,23 @@
 """
-This is the core script for generating river maps
+This is the core script for generating river maps.
 
-Usage:
-Import and call the function "make_river_map",
-either directly, see sample_serial.py in the installation directory;
-or via the parralel driver, see sample_parallel.py in the installation directory
+In serial mode, import the function "make_river_map" as follows:
+'from RiverMapper.make_river_map import make_river_map'
+, and  directly call the function "make_river_map()".
+
+In parallel mode, call the function indirectly through
+the parallel driver "river_map_mpi_driver.py".
+
+Download sample applications including sample scripts and inputs
+for both the serial mode and the parallel mode here:
+http://ccrm.vims.edu/yinglong/feiye/Public/RiverMapper_Samples.tar
 """
 
 
 from builtins import ValueError
-from multiprocessing.sharedctypes import Value
 import os
-import pandas as pd
 from copy import deepcopy
+import pandas as pd
 import numpy as np
 from scipy import interpolate
 from scipy.spatial import cKDTree
@@ -24,6 +29,7 @@ import geopandas as gpd
 from RiverMapper.SMS import get_all_points_from_shp, curvature, get_perpendicular_angle
 from RiverMapper.SMS import SMS_ARC, SMS_MAP, cpp2lonlat, lonlat2cpp, dl_cpp2lonlat, dl_lonlat2cpp
 from RiverMapper.river_map_tif_preproc import Tif2XYZ, get_elev_from_tiles
+from RiverMapper.util import silentremove
 
 
 np.seterr(all='raise')
@@ -558,6 +564,10 @@ def snap_closeby_points(pt_xyz:np.ndarray):
     return xyz
 
 def snap_closeby_points_global(pt_xyz:np.ndarray, reso_ratio=0.2, n_nei=30):
+    '''
+    Snap closeby points to the same location.
+    Points are processed in two groups to improve efficiency.
+    '''
 
     xyz = deepcopy(pt_xyz)
     npts = xyz.shape[0]
@@ -593,10 +603,15 @@ def snap_closeby_points_global(pt_xyz:np.ndarray, reso_ratio=0.2, n_nei=30):
             i_nearby = abs((xyz[i, 0]+1j*xyz[i, 1])-(xyz[idx, 0]+1j*xyz[idx, 1])) < xyz[i, 2]
             target = min(idx[np.argwhere(i_nearby).squeeze()])  # always snap to the least index to assure consistency
             xyz[idx[i_nearby], :] = xyz[target, :]
-    
+
     return xyz, nsnap
 
 def CloseArcs(polylines: gpd.GeoDataFrame):
+    '''
+    Close polylines whose endpoints are not connected to other polylines.
+    Not actively used; needs more testing.
+    '''
+
     # Get all points from all polylines
     all_points = [point for line in polylines.geometry for point in line.coords]
     # Create a MultiPoint object from all points
@@ -769,6 +784,9 @@ def generate_river_outline_polys(river_arcs=None):
     return river_outline_polygons
 
 def clean_arcs0(LineStringList, blast_center, blast_radius, minimum_arc_length=10):
+    '''
+    Early version of clean_arcs, to be deprecated.
+    '''
     uu = gpd.GeoDataFrame({'index': range(len(LineStringList)),'geometry': LineStringList}).geometry.unary_union
 
     # # sample
@@ -924,6 +942,7 @@ def make_river_map(
     i_smooth_banks = True,
     i_DEM_cache = True,
     i_OCSMesh = False,
+    i_DiagnosticOutput = False,
 ):
     '''
     [Core routine for making river maps]
@@ -960,13 +979,18 @@ def make_river_map(
 
     i_DEM_cache : Whether or not to read DEM info from cache.
                   Reading from original *.tif files can be slow, so the default option is True
+
+    i_OCSMesh: Whether or not to generate outputs to be used as inputs to OCSMesh.
+
+    i_DiagnosticsOutput: whether to output diagnostic information
     '''
 
     # ------------------------- other input parameters not exposed to user ---------------------------
     iAdditionalOutputs = False
     nudge_ratio = np.array((0.3, 2.0))  # ratio between nudging distance to mean half-channel-width
+    i_fake_channel = False  # used to generate a fake channel for testing purpose or where the channel is not well defined in the DEM
+                            # it can also be used to generate a fixed-width levee for a given levee centerline (sample applications to be added)
     thalweg_smooth_shp_fname = None  # deprecated: name of a polyline shapefile containing the smoothed thalwegs (e.g., pre-processed by GIS tools or SMS)
-    i_fake_channel = False
     # ------------------------- end other inputs ---------------------------
 
     # ----------------------   pre-process some inputs -------------------------
@@ -1110,7 +1134,8 @@ def make_river_map(
     blast_radius = -np.ones((len(thalwegs), 2), dtype=float)
     blast_center = np.zeros((len(thalwegs), 2), dtype=complex)
     smoothed_thalwegs = [None] * len(thalwegs)
-    redistributed_thalwegs = [None] * len(thalwegs)
+    redistributed_thalwegs_pre_correction = [None] * len(thalwegs)
+    redistributed_thalwegs_after_correction = [None] * len(thalwegs)
     corrected_thalwegs = [None] * len(thalwegs)
     centerlines = [None] * len(thalwegs)
     thalwegs_cc_reso = [None] * len(thalwegs)
@@ -1135,7 +1160,7 @@ def make_river_map(
             this_nrow_arcs = min(max_nrow_arcs, width2narcs(np.mean(width), min_arcs=min_arcs))
         thalweg, thalweg_smooth, reso, retained_idx = redistribute_arc(thalweg, thalweg_smooth, width, this_nrow_arcs, length_width_ratio=length_width_ratio, smooth_option=1, endpoints_scale=endpoints_scale, idryrun=True)
         smoothed_thalwegs[i] = SMS_ARC(points=np.c_[thalweg_smooth[:, 0], thalweg_smooth[:, 1]], src_prj='cpp')
-        redistributed_thalwegs[i] = SMS_ARC(points=np.c_[thalweg[:, 0], thalweg[:, 1]], src_prj='cpp')
+        redistributed_thalwegs_pre_correction[i] = SMS_ARC(points=np.c_[thalweg[:, 0], thalweg[:, 1]], src_prj='cpp')
 
         if len(thalweg[:, 0]) < 2:
             print(f"{mpi_print_prefix} warning: thalweg {i+1} only has one point after redistribution, neglecting ...")
@@ -1165,7 +1190,7 @@ def make_river_map(
             this_nrow_arcs = min(max_nrow_arcs, width2narcs(np.mean(width), min_arcs=min_arcs))
             thalweg, thalweg_smooth, reso, retained_idx = redistribute_arc(thalweg, thalweg_smooth[retained_idx], width, this_nrow_arcs, length_width_ratio=length_width_ratio, smooth_option=1, endpoints_scale=endpoints_scale)
             smoothed_thalwegs[i] = SMS_ARC(points=np.c_[thalweg_smooth[:, 0], thalweg_smooth[:, 1]], src_prj='cpp')
-            redistributed_thalwegs[i] = SMS_ARC(points=np.c_[thalweg[:, 0], thalweg[:, 1]], src_prj='cpp')
+            redistributed_thalwegs_after_correction[i] = SMS_ARC(points=np.c_[thalweg[:, 0], thalweg[:, 1]], src_prj='cpp')
 
             # Smooth thalweg
             thalweg, perp = smooth_thalweg(thalweg, ang_diff_shres=np.pi/2.4)
@@ -1294,20 +1319,24 @@ def make_river_map(
     # end enumerating each thalweg
 
     # -----------------------------------diagnostic outputs ----------------------------
-    if any(bank_arcs.flatten()) and not i_fake_channel:  # not all arcs are None
-        SMS_MAP(arcs=bank_arcs.reshape((-1, 1))).writer(filename=f'{output_dir}/{output_prefix}bank.map')
-        SMS_MAP(arcs=bank_arcs_raw.reshape((-1, 1))).writer(filename=f'{output_dir}/{output_prefix}bank_raw.map')
-        SMS_MAP(arcs=cc_arcs.reshape((-1, 1))).writer(filename=f'{output_dir}/{output_prefix}cc_arcs.map')
-        SMS_MAP(arcs=river_arcs.reshape((-1, 1))).writer(filename=f'{output_dir}/{output_prefix}river_arcs.map')
-        SMS_MAP(detached_nodes=bombed_points).writer(filename=f'{output_dir}/{output_prefix}relax_points.map')
-        SMS_MAP(arcs=smoothed_thalwegs).writer(filename=f'{output_dir}/{output_prefix}smoothed_thalweg.map')
-        SMS_MAP(arcs=redistributed_thalwegs).writer(filename=f'{output_dir}/{output_prefix}redist_thalweg.map')
-        SMS_MAP(arcs=corrected_thalwegs).writer(filename=f'{output_dir}/{output_prefix}corrected_thalweg.map')
-    else:
-        print(f'{mpi_print_prefix} No arcs found, aborted writing to *.map')
+    if i_DiagnosticOutput:
+        if any(bank_arcs.flatten()) and not i_fake_channel:  # not all arcs are None
+            SMS_MAP(arcs=bank_arcs.reshape((-1, 1))).writer(filename=f'{output_dir}/{output_prefix}bank.map')
+            SMS_MAP(arcs=bank_arcs_raw.reshape((-1, 1))).writer(filename=f'{output_dir}/{output_prefix}bank_raw.map')
+            SMS_MAP(arcs=cc_arcs.reshape((-1, 1))).writer(filename=f'{output_dir}/{output_prefix}cc_arcs.map')
+            SMS_MAP(arcs=river_arcs.reshape((-1, 1))).writer(filename=f'{output_dir}/{output_prefix}river_arcs.map')
+            SMS_MAP(detached_nodes=bombed_points).writer(filename=f'{output_dir}/{output_prefix}relax_points.map')
+            SMS_MAP(arcs=smoothed_thalwegs).writer(filename=f'{output_dir}/{output_prefix}smoothed_thalweg.map')
+            SMS_MAP(arcs=redistributed_thalwegs_pre_correction).writer(filename=f'{output_dir}/{output_prefix}redist_thalweg_pre_correction.map')
+            SMS_MAP(arcs=redistributed_thalwegs_after_correction).writer(filename=f'{output_dir}/{output_prefix}redist_thalweg_after_correction.map')
+            SMS_MAP(arcs=corrected_thalwegs).writer(filename=f'{output_dir}/{output_prefix}corrected_thalweg.map')
+        else:
+            print(f'{mpi_print_prefix} No arcs found, aborted writing to *.map')
 
-    del smoothed_thalwegs[:], redistributed_thalwegs[:], corrected_thalwegs[:]
-    del bank_arcs, bank_arcs_raw, bombed_points, smoothed_thalwegs, redistributed_thalwegs, corrected_thalwegs
+    del smoothed_thalwegs[:], redistributed_thalwegs_pre_correction[:]
+    del redistributed_thalwegs_after_correction[:], corrected_thalwegs[:]
+    del bank_arcs, bank_arcs_raw, bombed_points, smoothed_thalwegs,
+    del redistributed_thalwegs_pre_correction, redistributed_thalwegs_after_correction, corrected_thalwegs
 
     # ------------------------- Clean up and finalize ---------------------------
     for i, thalweg_neighbors in enumerate(thalwegs_neighbors):

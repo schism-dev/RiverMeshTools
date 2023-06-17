@@ -1,4 +1,3 @@
-# %%
 import os
 from osgeo import gdal
 from schism_py_pre_post.Rivermap.make_river_map import Tif2XYZ

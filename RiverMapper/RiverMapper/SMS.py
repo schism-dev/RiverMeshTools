@@ -13,7 +13,6 @@ from shapely.geometry import LineString
 import glob
 import numpy as np
 import re
-import shapefile
 import geopandas as gpd
 from RiverMapper.util import silentremove
 

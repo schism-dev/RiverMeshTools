@@ -22,10 +22,12 @@ with io.open('README.md','r', encoding='utf8') as fh:
   ],
   package_data={'RiverMapper': ['Datafiles/*']},
   install_requires=[
-    'numpy',
-    'pandas',
     'gdal>=3.6.0',
     'shapely>=2.0.0',
     'geopandas>=0.12.0',
+    'numpy',
+    'pandas',
+    'scipy',
+    'Scikit-learn'
   ],
 )
