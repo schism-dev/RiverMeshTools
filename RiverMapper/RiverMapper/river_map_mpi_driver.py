@@ -18,7 +18,7 @@ import pickle
 import geopandas as gpd
 from shapely.ops import polygonize
 from RiverMapper.river_map_tif_preproc import find_thalweg_tile, Tif2XYZ
-from RiverMapper.make_river_map import make_river_map, clean_intersections, geos2SmsArcList, Geoms_XY, clean_arcs
+from RiverMapper.make_river_map import make_river_map, clean_intersections, geos2SmsArcList, Geoms_XY, clean_arcs, Config_make_river_map
 from RiverMapper.SMS import merge_maps, SMS_MAP
 from RiverMapper.util import silentremove
 
@@ -73,10 +73,9 @@ def river_map_mpi_driver(
     dems_json_file = './dems.json',  # files for all DEM tiles
     thalweg_shp_fname='',
     output_dir = './',
+    river_map_config = None,
     thalweg_buffer = 1000,
     i_DEM_cache = True,
-    i_blast_intersection = False,
-    i_OCSMesh = False,
     comm = MPI.COMM_WORLD
 ):
     '''
@@ -109,6 +108,10 @@ def river_map_mpi_driver(
     #                   This is usually fast even without reading cache.
     i_grouping_cache = True; iValidateCache = False
     cache_folder = './Cache/'
+
+    # configurations (parameters) for make_river_map()
+    if river_map_config is None:
+        river_map_config = Config_make_river_map()  # use default configurations
 
     rank = comm.Get_rank()
     size = comm.Get_size()
@@ -199,15 +202,15 @@ def river_map_mpi_driver(
         time_this_group_start = time.time()
         print(f'Rank {rank}: Group {i+1} (global: {my_group_id}) started ...')
         if True:  # my_group_id in range(0, 200):
+            # update some parameters in the config file
+            river_map_config.optional['output_prefix'] = f'Group_{my_group_id}_{rank}_{i}_'
+            river_map_config.optional['mpi_print_prefix'] = f'[Rank {rank}, Group {i+1} of {len(my_tile_groups)}, global: {my_group_id}] '
+            river_map_config.optional['selected_thalweg'] = my_tile_group_thalwegs
             make_river_map(
                 tif_fnames = my_tile_group,
                 thalweg_shp_fname = thalweg_shp_fname,
-                selected_thalweg = my_tile_group_thalwegs,
                 output_dir = output_dir,
-                output_prefix = f'Group_{my_group_id}_{rank}_{i}_',
-                mpi_print_prefix = f'[Rank {rank}, Group {i+1} of {len(my_tile_groups)}, global: {my_group_id}] ',
-                i_blast_intersection=i_blast_intersection,
-                i_OCSMesh=i_OCSMesh,
+                **river_map_config.optional,
             )
         else:
             pass  # print(f'Rank {rank}: Group {my_group_id} failed')
@@ -227,9 +230,12 @@ def river_map_mpi_driver(
         time_final_cleanup_start = time.time()
 
         total_arcs_cleaned = [arc for arc in total_arcs_map.to_GeoDataFrame().geometry.unary_union.geoms]
-        if not i_blast_intersection:
+        if not river_map_config.optional['i_blast_intersection']:
             bomb_polygons = gpd.read_file(f'{output_dir}/total_bomb_polygons.shp')
-            total_arcs_cleaned = clean_intersections(arcs=total_arcs_cleaned, target_polygons=bomb_polygons, snap_points=total_intersection_joints, i_OCSMesh=i_OCSMesh)
+            total_arcs_cleaned = clean_intersections(
+                arcs=total_arcs_cleaned, target_polygons=bomb_polygons, snap_points=total_intersection_joints,
+                i_OCSMesh=river_map_config.optional['i_OCSMesh']
+            )
         total_arcs_cleaned = clean_arcs(total_arcs_cleaned)
         SMS_MAP(arcs=geos2SmsArcList(total_arcs_cleaned)).writer(filename=f'{output_dir}/total_arcs.map')
 
@@ -238,7 +244,7 @@ def river_map_mpi_driver(
         ).to_file(filename=f'{output_dir}/total_arcs.shp', driver="ESRI Shapefile")
 
         # outputs for OCSMesh
-        if i_OCSMesh:
+        if river_map_config.optional['i_OCSMesh']:
             total_arcs_cleaned_polys = [poly for poly in polygonize(gpd.GeoSeries(total_arcs_cleaned))]
             gpd.GeoDataFrame(
                 index=range(len(total_arcs_cleaned_polys)), crs='epsg:4326', geometry=total_arcs_cleaned_polys

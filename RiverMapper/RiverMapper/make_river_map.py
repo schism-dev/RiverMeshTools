@@ -34,6 +34,52 @@ from RiverMapper.util import silentremove
 
 np.seterr(all='raise')
 
+class Config_make_river_map():
+    '''A class to handle the configuration of the river map generation,
+    i.e., processing the parameters for the function make_river_map()
+    and storing the factory settings for the river map generation.'''
+    def __init__(self,
+        i_DEM_cache = True, selected_thalweg = None,
+        MapUnit2METER = 1, river_threshold = (5, 400), min_arcs = 3,
+        outer_arcs_positions = (), length_width_ratio = 6.0,
+        i_blast_intersection = False, blast_radius_scale = 0.4, bomb_radius_coef = 0.3,
+        i_close_poly = True, i_smooth_banks = True,
+        output_prefix = '', mpi_print_prefix = '', i_OCSMesh = False, i_DiagnosticOutput = False,
+    ):
+        # see a description of the parameters in the function make_river_map()
+        self.optional = {
+            'selected_thalweg': selected_thalweg,
+            'output_prefix': output_prefix,
+            'mpi_print_prefix': mpi_print_prefix,
+            'MapUnit2METER': MapUnit2METER,
+            'river_threshold': river_threshold,
+            'min_arcs': min_arcs,
+            'outer_arcs_positions': outer_arcs_positions,
+            'length_width_ratio': length_width_ratio,
+            'i_close_poly': i_close_poly,
+            'i_blast_intersection': i_blast_intersection,
+            'blast_radius_scale': blast_radius_scale,
+            'bomb_radius_coef': bomb_radius_coef,
+            'i_smooth_banks': i_smooth_banks,
+            'i_DEM_cache': i_DEM_cache,
+            'i_OCSMesh': i_OCSMesh,
+            'i_DiagnosticOutput': i_DiagnosticOutput,
+        }
+
+    @classmethod
+    def LooselyFollowRivers(cls):
+        '''Small-scale river curvatures may not be exactly followed,
+        but channel connectivity is still preserved.'''
+        return cls(
+            length_width_ratio = 30.0,
+        )
+    
+    @classmethod
+    def PseudoChannels(cls):
+        '''Expand all thalwegs to channels of a fixed width.
+        Also useful for resolving levees of a fixed width'''
+        pass
+
 
 class Bombs():
     def __init__(self, xyz: np.ndarray, crs='epsg:4326'):
@@ -942,59 +988,46 @@ def get_bank(S_list, x, y, thalweg_eta, xt, yt, search_steps=100, search_toleran
 
     return x_banks, y_banks
 
-
 def make_river_map(
-    tif_fnames: list, thalweg_shp_fname = '',
-    selected_thalweg = None, output_dir = './', output_prefix = '', mpi_print_prefix = '',
-    MapUnit2METER = 1, river_threshold = (5, 400),
-    min_arcs = 3,
-    outer_arcs_positions = (), length_width_ratio = 6.0,
-    i_close_poly = True, i_blast_intersection = False,
-    blast_radius_scale = 0.4, bomb_radius_coef = 0.3,
-    i_smooth_banks = True,
-    i_DEM_cache = True,
-    i_OCSMesh = False,
-    i_DiagnosticOutput = False,
-):
+        tif_fnames, thalweg_shp_fname, output_dir,
+        i_DEM_cache = True, selected_thalweg = None,
+        MapUnit2METER = 1, river_threshold = (5, 400), min_arcs = 3,
+        outer_arcs_positions = (), length_width_ratio = 6.0,
+        i_blast_intersection = False, blast_radius_scale = 0.4, bomb_radius_coef = 0.3,
+        i_close_poly = True, i_smooth_banks = True,
+        output_prefix = '', mpi_print_prefix = '', i_OCSMesh = False, i_DiagnosticOutput = False,
+    ):
     '''
     [Core routine for making river maps]
+    <Mandatory Inputs>:
+    - tif_fnames: a list of TIF file names. These TIFs should cover the area of interest and be arranged by priority (higher priority ones in front)
+    - thalweg_shp_fname: name of a polyline shapefile containing the thalwegs
+    - output_dir: must specify one.
 
-    tif_fnames: a list of TIF file names. These TIFs should cover the area of interest and be arranged by priority (higher priority ones in front)
-
-    thalweg_shp_fname: name of a polyline shapefile containing the thalwegs
-
-    selected_thalweg: indices of selected thalwegs for which the river arcs will be sought.
-
-    output_dir: must specify one.
-
-    output_prefix: a prefix of the output files, mainly used by the caller of this script; can be empty
-
-    mpi_print_prefix: a prefix string to identify the calling mpi processe in the output messages; can be empty
-
-    MapUnit2METER = 1:  to be replaced by projection code, e.g., epsg: 4326, esri: 120008, etc.
-
-    river_threshold:  minimum and maximum river widths (in meters) to be resolved
-
-    outer_arc_positions: relative position of outer arcs, e.g., (0.1, 0.2) will add 2 outer arcs on each side of the river (4 in total),
+    <Optional Inputs>:
+    These inputs can also be handled by the Config_make_river_map class (recommended).
+    - selected_thalweg: indices of selected thalwegs for which the river arcs will be sought.
+    - output_prefix: a prefix of the output files, mainly used by the caller of this script; can be empty
+    - mpi_print_prefix: a prefix string to identify the calling mpi processe in the output messages; can be empty
+    - MapUnit2METER = 1:  to be replaced by projection code, e.g., epsg: 4326, esri: 120008, etc.
+    - river_threshold:  minimum and maximum river widths (in meters) to be resolved
+    - outer_arc_positions: relative position of outer arcs, e.g., (0.1, 0.2) will add 2 outer arcs on each side of the river (4 in total),
         at 0.1*riverwidth and 0.2*riverwidth from the banks.
+    - length_width_ratio: a ratio of element length in the along-channel direction to river width;
+        when a river is narrower than the lower limit, the bank will be nudged (see next parameter) to widen the river
+    - i_close_poly: whether to add cross-channel arcs to enclose river arcs into a polygon
+    - i_blast_intersection: whether to replace intersecting arcs (often noisy) at river intersections with scatter points (cleaner)
+    - blast_radius_scale:  coef controlling the blast radius at intersections, a larger number leads to more intersection features being deleted
+    - bomb_radius_coef:  coef controlling the spacing among intersection joints, a larger number leads to sparser intersection joints
+    - i_DEM_cache : Whether or not to read DEM info from cache.
+        Reading from original *.tif files can be slow, so the default option is True
+    - i_OCSMesh: Whether or not to generate outputs to be used as inputs to OCSMesh.
+    - i_DiagnosticsOutput: whether to output diagnostic information
 
-    length_width_ratio: a ratio of element length in the along-channel direction to river width;
-                        when a river is narrower than the lower limit, the bank will be nudged (see next parameter) to widen the river
-
-    i_close_poly: whether to add cross-channel arcs to enclose river arcs into a polygon
-
-    i_blast_intersection: whether to replace intersecting arcs (often noisy) at river intersections with scatter points (cleaner)
-
-    blast_radius_scale:  coef controlling the blast radius at intersections, a larger number leads to more intersection features being deleted
-
-    bomb_radius_coef:  coef controlling the spacing among intersection joints, a larger number leads to sparser intersection joints
-
-    i_DEM_cache : Whether or not to read DEM info from cache.
-                  Reading from original *.tif files can be slow, so the default option is True
-
-    i_OCSMesh: Whether or not to generate outputs to be used as inputs to OCSMesh.
-
-    i_DiagnosticsOutput: whether to output diagnostic information
+    <Outputs>:
+    - total_arcs.shp: a polyline shapefile containing all the river arcs
+    - total_arcs.map: an SMS map file containing all the river arcs, same as total_arcs.shp besides the format
+    - other diagnostic outputs (if i_DiagnosticsOutput is True) and additional outputs (if i_OCSMesh is True)
     '''
 
     # ------------------------- other input parameters not exposed to user ---------------------------
