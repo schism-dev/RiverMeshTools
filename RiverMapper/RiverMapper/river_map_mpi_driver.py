@@ -210,7 +210,7 @@ def river_map_mpi_driver(
                 tif_fnames = my_tile_group,
                 thalweg_shp_fname = thalweg_shp_fname,
                 output_dir = output_dir,
-                **river_map_config.optional,
+                **river_map_config.optional,  # pass all optional parameters with a dictionary
             )
         else:
             pass  # print(f'Rank {rank}: Group {my_group_id} failed')
@@ -234,9 +234,10 @@ def river_map_mpi_driver(
             bomb_polygons = gpd.read_file(f'{output_dir}/total_bomb_polygons.shp')
             total_arcs_cleaned = clean_intersections(
                 arcs=total_arcs_cleaned, target_polygons=bomb_polygons, snap_points=total_intersection_joints,
-                i_OCSMesh=river_map_config.optional['i_OCSMesh']
+                i_OCSMesh=river_map_config.optional['i_OCSMesh'],
+                idummy=river_map_config.optional['i_pseudo_channel']==1,
             )
-        total_arcs_cleaned = clean_arcs(total_arcs_cleaned)
+        total_arcs_cleaned = clean_arcs(total_arcs_cleaned, clean_reso_ratio=river_map_config.cleanup['clean_reso_ratio'])
         SMS_MAP(arcs=geos2SmsArcList(total_arcs_cleaned)).writer(filename=f'{output_dir}/total_arcs.map')
 
         gpd.GeoDataFrame(

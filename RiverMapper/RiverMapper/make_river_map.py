@@ -43,8 +43,9 @@ class Config_make_river_map():
         MapUnit2METER = 1, river_threshold = (5, 400), min_arcs = 3,
         outer_arcs_positions = (), length_width_ratio = 6.0,
         i_blast_intersection = False, blast_radius_scale = 0.4, bomb_radius_coef = 0.3,
-        i_close_poly = True, i_smooth_banks = True,
+        i_close_poly = True, i_smooth_banks = True, clean_reso_ratio = 0.2,
         output_prefix = '', mpi_print_prefix = '', i_OCSMesh = False, i_DiagnosticOutput = False,
+        i_pseudo_channel = 0, pseudo_channel_width = 18, nrow_pseudo_channel = 4,
     ):
         # see a description of the parameters in the function make_river_map()
         self.optional = {
@@ -64,22 +65,40 @@ class Config_make_river_map():
             'i_DEM_cache': i_DEM_cache,
             'i_OCSMesh': i_OCSMesh,
             'i_DiagnosticOutput': i_DiagnosticOutput,
+            'i_pseudo_channel': i_pseudo_channel,
+            'pseudo_channel_width': pseudo_channel_width,
+            'nrow_pseudo_channel': nrow_pseudo_channel,
+        }
+        self.cleanup = {
+            'clean_reso_ratio': clean_reso_ratio,
         }
 
     @classmethod
     def LooselyFollowRivers(cls):
         '''Small-scale river curvatures may not be exactly followed,
         but channel connectivity is still preserved.'''
-        return cls(
-            length_width_ratio = 30.0,
-        )
+        return cls(length_width_ratio = 30.0)
     
     @classmethod
-    def PseudoChannels(cls):
-        '''Expand all thalwegs to channels of a fixed width.
-        Also useful for resolving levees of a fixed width'''
-        pass
+    def Levees(cls):
+        '''
+        Expand all thalwegs (in this case levee centerlines)
+        to channels (in this case levees with two feet and a flat top)
+        of a fixed width (in this case foot-to-foot width)
+        '''
+        return cls(i_pseudo_channel = 1, pseudo_channel_width = 18,
+                   nrow_pseudo_channel = 4, length_width_ratio = 50.0,
+                   bomb_radius_coef = 0.2, blast_radius_scale = 0.01, clean_reso_ratio = -2e-5,
+                   i_smooth_banks = False, river_threshold = (18, 18), min_arcs = 4)
 
+    @classmethod
+    def PseudoChannels(cls):
+        '''
+        Expand all thalwegs (in this case levee centerlines)
+        to channels (in this case levees with two feet and a flat top)
+        of a fixed width (in this case foot-to-foot width)
+        '''
+        return cls(i_pseudo_channel = 2, pseudo_channel_width = 30, nrow_pseudo_channel = 4)
 
 class Bombs():
     def __init__(self, xyz: np.ndarray, crs='epsg:4326'):
@@ -609,7 +628,7 @@ def snap_closeby_points(pt_xyz:np.ndarray):
         xyz[i_near, :] = xyz[i, :]
     return xyz
 
-def snap_closeby_points_global(pt_xyz:np.ndarray, reso_ratio=0.2, n_nei=30):
+def snap_closeby_points_global(pt_xyz:np.ndarray, clean_reso_ratio=0.2, n_nei=30):
     '''
     Snap closeby points to the same location.
     A double loop is used for each point,
@@ -627,19 +646,25 @@ def snap_closeby_points_global(pt_xyz:np.ndarray, reso_ratio=0.2, n_nei=30):
 
     nsnap = 0
 
+    if clean_reso_ratio > 0:
+        dist_thres = xyz[:, 2] * clean_reso_ratio
+    else:
+        dist_thres = -clean_reso_ratio * np.ones(xyz[:, 2].shape)  # negative clean_reso_ratio means absolute distance
+
     # Two groups of points:
     # Type-I points:
     # The last of n_nei neighbors is within the search radius,
     # so there could be additional closeby neighbors not included in the n_nei neighbors
     # so we need to loop trhough all points to find them
     # Since there should not be many of them, the efficiency is not a concern
-    points_with_many_neighbors = (distances[:, -1] < xyz[:, 2]*reso_ratio)
+    points_with_many_neighbors = (distances[:, -1] < dist_thres)
+
     print(f'{sum(points_with_many_neighbors)} vertices marked for cleaning I')
     nsnap += sum(points_with_many_neighbors)
     if sum(points_with_many_neighbors) > 0:
         points_with_many_neighbors = np.where(points_with_many_neighbors)[0]
         for i in points_with_many_neighbors:
-            nearby_points = abs((xyz[i, 0]+1j*xyz[i, 1])-(xyz[:, 0]+1j*xyz[:, 1])) < xyz[i, 2]
+            nearby_points = abs((xyz[i, 0]+1j*xyz[i, 1])-(xyz[:, 0]+1j*xyz[:, 1])) < dist_thres[i]
             target = min(np.where(nearby_points)[0])  # always snap to the least index to assure consistency
             xyz[nearby_points, :] = xyz[target, :]
 
@@ -651,14 +676,15 @@ def snap_closeby_points_global(pt_xyz:np.ndarray, reso_ratio=0.2, n_nei=30):
     distances, indices = nbrs.kneighbors(xyz)
     distances[distances==0.0] = 9999
     # for each Type-II point, find its close-by neighbors if any
-    points_with_few_neighbors = (np.min(distances, axis=1) <= xyz[:, 2]*reso_ratio)*(distances[:, -1] >= xyz[:, 2]*reso_ratio)
+    points_with_few_neighbors = (np.min(distances, axis=1) <= dist_thres)*(distances[:, -1] >= dist_thres)
+
     nsnap += sum(points_with_few_neighbors)
     print(f'{sum(points_with_few_neighbors)} vertices marked for cleaning II')
     if sum(points_with_few_neighbors) > 0:
         points_with_few_neighbors = np.where(points_with_few_neighbors)[0]
         for i in points_with_few_neighbors:
             idx = indices[i, :]
-            i_nearby = abs((xyz[i, 0]+1j*xyz[i, 1])-(xyz[idx, 0]+1j*xyz[idx, 1])) < xyz[i, 2]
+            i_nearby = abs((xyz[i, 0]+1j*xyz[i, 1])-(xyz[idx, 0]+1j*xyz[idx, 1])) < dist_thres[i]
             target = min(idx[np.where(i_nearby)[0]])  # always snap to the least index to assure consistency
             xyz[idx[i_nearby], :] = xyz[target, :]
 
@@ -788,14 +814,14 @@ def clean_intersections(arcs=None, target_polygons=None, snap_points: np.ndarray
 
     return [arc for arc in cleaned_arcs]
 
-def clean_arcs(arcs):
+def clean_arcs(arcs, clean_reso_ratio):
     print('cleaning all arcs iteratively ...')
     niter = 0
     while niter <= 10:
         niter += 1
         print(f'niter = {niter}')
         arc_points = Geoms_XY(geom_list=arcs, crs='epsg:4326', add_z=True)
-        xyz, nsnap = snap_closeby_points_global(arc_points.xy)
+        xyz, nsnap = snap_closeby_points_global(arc_points.xy, clean_reso_ratio=clean_reso_ratio)
         if nsnap == 0:
             break
         arc_points.update_coords(xyz)
@@ -996,6 +1022,7 @@ def make_river_map(
         i_blast_intersection = False, blast_radius_scale = 0.4, bomb_radius_coef = 0.3,
         i_close_poly = True, i_smooth_banks = True,
         output_prefix = '', mpi_print_prefix = '', i_OCSMesh = False, i_DiagnosticOutput = False,
+        i_pseudo_channel = 0, pseudo_channel_width = 18, nrow_pseudo_channel = 4,
     ):
     '''
     [Core routine for making river maps]
@@ -1023,6 +1050,13 @@ def make_river_map(
         Reading from original *.tif files can be slow, so the default option is True
     - i_OCSMesh: Whether or not to generate outputs to be used as inputs to OCSMesh.
     - i_DiagnosticsOutput: whether to output diagnostic information
+    - i_pseudo_channel:
+        =0: default, no pseudo channel, nrow_pseudo_channel and pseudo_channel_width are ignored
+        =1: fixed-width channel with nrow elements in the cross-channel direction,
+          it can also be used to generate a fixed-width levee for a given levee centerline
+        =2: implement a pseudo channel when the river is poorly defined in DEM
+    - pseudo_channel_width:  width of the pseudo channel (in meters)
+    - nrow_pseudo_channel:  number of rows of elements in the cross-channel direction in the pseudo channel
 
     <Outputs>:
     - total_arcs.shp: a polyline shapefile containing all the river arcs
@@ -1033,21 +1067,16 @@ def make_river_map(
     # ------------------------- other input parameters not exposed to user ---------------------------
     iAdditionalOutputs = False
     nudge_ratio = np.array((0.3, 2.0))  # ratio between nudging distance to mean half-channel-width
-    i_fake_channel = False  # used to generate a fake channel for testing purpose or where the channel is not well defined in the DEM
-                            # it can also be used to generate a fixed-width levee for a given levee centerline (sample applications to be added)
     thalweg_smooth_shp_fname = None  # deprecated: name of a polyline shapefile containing the smoothed thalwegs (e.g., pre-processed by GIS tools or SMS)
     # ------------------------- end other inputs ---------------------------
 
     # ----------------------   pre-process some inputs -------------------------
     river_threshold = np.array(river_threshold) / MapUnit2METER
 
-    if i_fake_channel:
+    if i_pseudo_channel == 1:
         inner_arc_type = "fake"
         require_dem = False
-        nrow_fake_channel = 4
-        const_bank_width = 18.0
         endpoints_scale = 1.0
-        length_width_ratio = 50.0
     else:
         inner_arc_type = "regular"
         require_dem = True
@@ -1144,7 +1173,7 @@ def make_river_map(
                 get_two_banks(S_list, thalweg, thalweg_eta, search_length, search_steps, min_width=river_threshold[0])
         else:
             x_banks_left, y_banks_left, x_banks_right, y_banks_right, _, width = \
-                get_fake_banks(thalweg, const_bank_width=const_bank_width)
+                get_fake_banks(thalweg, const_bank_width=pseudo_channel_width)
 
         thalweg_widths[i] = width
         if width is None:
@@ -1199,8 +1228,8 @@ def make_river_map(
             continue
 
         # Redistribute thalwegs vertices
-        if i_fake_channel:
-            this_nrow_arcs = nrow_fake_channel
+        if i_pseudo_channel == 1:
+            this_nrow_arcs = nrow_pseudo_channel
         else:
             this_nrow_arcs = min(max_nrow_arcs, width2narcs(np.mean(width), min_arcs=min_arcs))
         thalweg, thalweg_smooth, reso, retained_idx = redistribute_arc(thalweg, thalweg_smooth, width, this_nrow_arcs, length_width_ratio=length_width_ratio, smooth_option=1, endpoints_scale=endpoints_scale, idryrun=True)
@@ -1211,10 +1240,10 @@ def make_river_map(
             print(f"{mpi_print_prefix} warning: thalweg {i+1} only has one point after redistribution, neglecting ...")
             continue
 
-        if i_fake_channel:
+        if i_pseudo_channel == 1:
             x_banks_left, y_banks_left, x_banks_right, y_banks_right, _, width = \
-                get_fake_banks(thalweg, const_bank_width=const_bank_width)
-            arc_position = set_inner_arc_position(nrow_arcs=nrow_fake_channel, type=inner_arc_type)
+                get_fake_banks(thalweg, const_bank_width=pseudo_channel_width)
+            arc_position = set_inner_arc_position(nrow_arcs=nrow_pseudo_channel, type=inner_arc_type)
         else:
             # update thalweg info
             elevs = get_elev_from_tiles(thalweg[:, 0],thalweg[:, 1], S_list)
@@ -1365,7 +1394,7 @@ def make_river_map(
 
     # -----------------------------------diagnostic outputs ----------------------------
     if i_DiagnosticOutput:
-        if any(bank_arcs.flatten()) and not i_fake_channel:  # not all arcs are None
+        if any(bank_arcs.flatten()) and i_pseudo_channel != 1:  # not all arcs are None
             SMS_MAP(arcs=bank_arcs.reshape((-1, 1))).writer(filename=f'{output_dir}/{output_prefix}bank.map')
             SMS_MAP(arcs=bank_arcs_raw.reshape((-1, 1))).writer(filename=f'{output_dir}/{output_prefix}bank_raw.map')
             SMS_MAP(arcs=cc_arcs.reshape((-1, 1))).writer(filename=f'{output_dir}/{output_prefix}cc_arcs.map')
