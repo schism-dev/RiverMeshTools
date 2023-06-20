@@ -237,7 +237,13 @@ def river_map_mpi_driver(
                 i_OCSMesh=river_map_config.optional['i_OCSMesh'],
                 idummy=river_map_config.optional['i_pseudo_channel']==1,
             )
-        total_arcs_cleaned = clean_arcs(total_arcs_cleaned, clean_reso_ratio=river_map_config.optional['clean_reso_ratio'])
+        # real_clean is not ncessary because it has been done in sub-groups before merging
+        total_arcs_cleaned = clean_arcs(
+            total_arcs_cleaned,
+            snap_point_reso_ratio=river_map_config.optional['snap_point_reso_ratio'],
+            snap_arc_reso_ratio=river_map_config.optional['snap_arc_reso_ratio'],
+            real_clean=False,
+        )
         SMS_MAP(arcs=geos2SmsArcList(total_arcs_cleaned)).writer(filename=f'{output_dir}/total_arcs.map')
 
         gpd.GeoDataFrame(

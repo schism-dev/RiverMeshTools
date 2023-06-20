@@ -196,6 +196,14 @@ class Geoms_XY():
         self.xy[i_target_points, :] = snap_points[idx, :]
 
         self.xy2geomlist()
+    
+    def snap_to_self(self, tolerance):
+        # Check for approximate equality within tolerance
+        unique_rows = np.unique(np.round(self.xy, decimals=int(-np.log10(tolerance))),
+                                axis=0, return_index=True)[1]
+        # Get the unique rows
+        new_xyz = self.xy[unique_rows, :]
+        self.snap_to_points(new_xyz)
 
 def moving_average(a, n=10, self_weights=0):
     if len(a) <= n:
@@ -688,7 +696,7 @@ def snap_closeby_points_global(pt_xyz:np.ndarray, clean_reso_ratio=None, n_nei=3
 
     return xyz, nsnap
 
-def snap_closeby_lines_global(lines, ratio=0.01):
+def snap_closeby_lines_global(lines, ratio=0.2):
     # snapped_lines = []
     # for i, line in enumerate(lines):
     #     line_z = line.coords[0][2]  # Assuming z-coordinate is present in the first vertex of the line
@@ -708,36 +716,76 @@ def snap_closeby_lines_global(lines, ratio=0.01):
     # snapped_arcs = [arc for arc in gpd.GeoDataFrame(geometry=snapped_lines).unary_union.geoms]
     # return snapped_arcs
 
+    # Break each LineString into segments
     from rtree import index
+    from shapely.ops import nearest_points
+
     # Create a spatial index for faster querying
     idx = index.Index()
     for i, line in enumerate(lines):
         idx.insert(i, line.bounds)
+    
+    updownstreams = [[[], []] for _ in range(len(lines))]
+    neighbors = [[[], []] for _ in range(len(lines))]
+    for i, line in enumerate(lines):
+        tolerance = np.mean(np.array(line.coords), axis=0)[-1]  # average z-coordinate
+        neighbor = list(idx.intersection(line.buffer(10 * tolerance).bounds))  # only test nearby lines
+        neighbor.remove(i)  # remove self
+        neighbors[i] = neighbor
+        for j in [0, -1]:
+            point = Point(line.coords[j])
+            for nei in neighbor:
+                if lines[nei] is None: continue
+                if lines[nei].intersects(line):
+                    updownstreams[i][j].append(nei)
 
-    snapped_lines = []
+    line_bufs = []
+    line_bufs_small = []
+    for i, line in enumerate(lines):
+        tols = np.mean(np.array([z for x, y, z in line.coords]))  * ratio
+        line_bufs.append(line.buffer(tols))
+        tols = np.mean(np.array([z for x, y, z in line.coords]))  * ratio * 0.2
+        line_bufs_small.append(line.buffer(tols))
 
     for i, line in enumerate(lines):
-        line_z = line.coords[0][2]  # Assuming z-coordinate is present in the first vertex of the line
-        tolerance = 10e-5
+        neighbor = neighbors[i]
 
-        # Query neighboring lines within the tolerance distance using the spatial index
-        neighbors = list(idx.intersection(line.buffer(tolerance).bounds))
+        points = [Point(x, y, z) for x, y, z in line.coords]
 
-        # Exclude the current line from the neighbors list
-        neighbors.remove(i)
+        for j, point in enumerate(points):
+            tolerance = point.coords[0][2] * ratio
+            if j == 0 or j == len(points) - 1:  # endpoints
+                # check if endpoints are connected to any neighboring line
+                if len(updownstreams[i][min(j, 1)]) == 0: # hanging endpoints, remove the entire line;
+                    # min(j, 1) is 0 for the first point and 1 for the last point
+                    lines[i] = None
+                    break  # go to next line
+                else:  # connected endpoints
+                    for nei in neighbor:
+                        if lines[nei] is None:
+                            continue
+                        elif nei in updownstreams[i][min(j, 1)]:
+                            continue  # skip the connected line, otherwise the endpoint is always in buffer
+                        elif point.within(line_bufs_small[nei]):  # remove the endpoint if it is within any neighboring line's buffer
+                            # a smaller buffer is used for the endpoints
+                            points[j] = None
+            else:
+                # check if an intermediate point is within any neighboring line's buffer
+                for nei in neighbor:
+                    if lines[nei] is None:
+                        continue  # skip the connected line, otherwise the endpoint is always in buffer
+                    if point.within(line_bufs[nei]):
+                        points[j] = None
 
-        # Filter the neighbors based on actual distance (not buffered distance)
-        nearest_lines = [lines[j] for j in neighbors if line.distance(lines[j]) < tolerance]
-
-        if nearest_lines:
-            snapped_line = unary_union(nearest_lines).intersection(line)
-            # Convert Point and MultiPoint geometries to LineString
-            if isinstance(snapped_line, MultiPoint):
-                # Convert MultiPoint to LineString
-                line = LineString(list(snapped_line.geoms))
-        snapped_lines.append(line)
-
-    return snapped_lines
+            new_points = [point for point in points if point is not None]
+            if len(new_points) >= 2:
+                lines[i] = LineString(new_points)
+            else:
+                lines[i] = None
+    
+    lines = [line for line in lines if line is not None]
+    lines = [line for line in gpd.GeoDataFrame(geometry=lines).unary_union.geoms]
+    return lines
     
 def CloseArcs(polylines: gpd.GeoDataFrame):
     '''
@@ -863,7 +911,7 @@ def clean_intersections(arcs=None, target_polygons=None, snap_points: np.ndarray
 
     return [arc for arc in cleaned_arcs]
 
-def clean_arcs(arcs, clean_reso_ratio):
+def clean_arcs(arcs, clean_reso_ratio, real_clean=True):
     print('cleaning all arcs iteratively ...')
 
     # snap with a smaller threshold in the first few iterations to avoid snapping to a further point
@@ -871,6 +919,11 @@ def clean_arcs(arcs, clean_reso_ratio):
     for i, ratio in enumerate(clean_reso_ratio * progressive_ratio):
         print(f'Iterration {i}: cleaning with ratio = {ratio}')
         arc_points = Geoms_XY(geom_list=arcs, crs='epsg:4326', add_z=True)
+
+        # pre-cleaning
+        if real_clean:
+            arc_points.snap_to_self(tolerance=2e-5)  # in degrees, roughly 2m
+
         xyz, nsnap = snap_closeby_points_global(arc_points.xy, clean_reso_ratio=clean_reso_ratio)
         if nsnap == 0:  # no more snapping
             break
@@ -878,12 +931,13 @@ def clean_arcs(arcs, clean_reso_ratio):
         arcs_gdf = gpd.GeoDataFrame({'index': range(len(arcs)),'geometry': arc_points.geom_list})
 
         arcs = [arc for arc in arcs_gdf.geometry.unary_union.geoms]
+        if real_clean:
+            arcs = snap_closeby_lines_global(arcs)
     if i > len(progressive_ratio):
         print(f'warning: cleaning terminated prematurely after {i} iterations')
     # arcs, arcs_gdf = CloseArcs(arcs_gdf)
 
     # snap nearby lines
-    # arcs = snap_closeby_lines_global(arcs)
 
     return arcs
 
