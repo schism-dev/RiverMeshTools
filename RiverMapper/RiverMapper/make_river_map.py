@@ -42,8 +42,9 @@ class Config_make_river_map():
         i_DEM_cache = True, selected_thalweg = None,
         MapUnit2METER = 1, river_threshold = (5, 400), min_arcs = 3,
         outer_arcs_positions = (), length_width_ratio = 6.0,
-        i_blast_intersection = False, blast_radius_scale = 0.4, bomb_radius_coef = 0.3,
-        i_close_poly = True, i_smooth_banks = True, clean_reso_ratio = 0.2,
+        i_blast_intersection = False, blast_radius_scale = 0.0, bomb_radius_coef = 0.3,
+        i_close_poly = True, i_smooth_banks = True,
+        snap_point_reso_ratio = 0.3, snap_arc_reso_ratio = 0.2,
         output_prefix = '', mpi_print_prefix = '', i_OCSMesh = False, i_DiagnosticOutput = False,
         i_pseudo_channel = 0, pseudo_channel_width = 18, nrow_pseudo_channel = 4,
     ):
@@ -61,7 +62,8 @@ class Config_make_river_map():
             'i_blast_intersection': i_blast_intersection,
             'blast_radius_scale': blast_radius_scale,
             'bomb_radius_coef': bomb_radius_coef,
-            'clean_reso_ratio': clean_reso_ratio,
+            'snap_point_reso_ratio': snap_point_reso_ratio,
+            'snap_arc_reso_ratio': snap_arc_reso_ratio,
             'i_smooth_banks': i_smooth_banks,
             'i_DEM_cache': i_DEM_cache,
             'i_OCSMesh': i_OCSMesh,
@@ -76,7 +78,7 @@ class Config_make_river_map():
         '''Small-scale river curvatures may not be exactly followed,
         but channel connectivity is still preserved.'''
         return cls(length_width_ratio = 30.0)
-    
+
     @classmethod
     def Levees(cls):
         '''
@@ -86,7 +88,7 @@ class Config_make_river_map():
         '''
         return cls(i_pseudo_channel = 1, pseudo_channel_width = 18,
                    nrow_pseudo_channel = 4, length_width_ratio = 50.0,
-                   bomb_radius_coef = 0.2, blast_radius_scale = 0.01, clean_reso_ratio = -2e-5,
+                   snap_point_reso_ratio = -2e-5,
                    i_smooth_banks = False, river_threshold = (18, 18), min_arcs = 4)
 
     @classmethod
@@ -196,7 +198,7 @@ class Geoms_XY():
         self.xy[i_target_points, :] = snap_points[idx, :]
 
         self.xy2geomlist()
-    
+
     def snap_to_self(self, tolerance):
         # Check for approximate equality within tolerance
         unique_rows = np.unique(np.round(self.xy, decimals=int(-np.log10(tolerance))),
@@ -634,7 +636,7 @@ def snap_closeby_points(pt_xyz:np.ndarray):
         xyz[i_near, :] = xyz[i, :]
     return xyz
 
-def snap_closeby_points_global(pt_xyz:np.ndarray, clean_reso_ratio=None, n_nei=30):
+def snap_closeby_points_global(pt_xyz:np.ndarray, snap_point_reso_ratio=None, n_nei=30):
     '''
     Snap closeby points to the same location.
     A double loop is used for each point,
@@ -652,10 +654,10 @@ def snap_closeby_points_global(pt_xyz:np.ndarray, clean_reso_ratio=None, n_nei=3
 
     nsnap = 0
 
-    if clean_reso_ratio > 0:
-        dist_thres = xyz[:, 2] * clean_reso_ratio
+    if snap_point_reso_ratio > 0:
+        dist_thres = xyz[:, 2] * snap_point_reso_ratio
     else:
-        dist_thres = -clean_reso_ratio * np.ones(xyz[:, 2].shape)  # negative clean_reso_ratio means absolute distance
+        dist_thres = -snap_point_reso_ratio * np.ones(xyz[:, 2].shape)  # negative snap_point_reso_ratio means absolute distance
 
     # Two groups of points:
     # Type-I points:
@@ -696,26 +698,7 @@ def snap_closeby_points_global(pt_xyz:np.ndarray, clean_reso_ratio=None, n_nei=3
 
     return xyz, nsnap
 
-def snap_closeby_lines_global(lines, ratio=0.2):
-    # snapped_lines = []
-    # for i, line in enumerate(lines):
-    #     line_z = line.coords[0][2]  # Assuming z-coordinate is present in the first vertex of the line
-    #     tolerance = line_z * clean_reso_ratio
-
-    #     nearest_lines = [other_line for other_line in lines if line.distance(other_line) < tolerance]
-
-    #     if len(nearest_lines) > 1:
-    #         snapped_line = unary_union(nearest_lines).intersection(line)
-    #         if type(snapped_line) == MultiLineString:
-    #             snapped_lines += [line for line in snapped_line.geoms]
-    #         else:
-    #             snapped_lines.append(snapped_line)
-    #     else:
-    #         snapped_lines.append(line)
-
-    # snapped_arcs = [arc for arc in gpd.GeoDataFrame(geometry=snapped_lines).unary_union.geoms]
-    # return snapped_arcs
-
+def snap_closeby_lines_global(lines, snap_arc_reso_ratio):
     # Break each LineString into segments
     from rtree import index
     from shapely.ops import nearest_points
@@ -724,7 +707,7 @@ def snap_closeby_lines_global(lines, ratio=0.2):
     idx = index.Index()
     for i, line in enumerate(lines):
         idx.insert(i, line.bounds)
-    
+
     updownstreams = [[[], []] for _ in range(len(lines))]
     neighbors = [[[], []] for _ in range(len(lines))]
     for i, line in enumerate(lines):
@@ -742,9 +725,9 @@ def snap_closeby_lines_global(lines, ratio=0.2):
     line_bufs = []
     line_bufs_small = []
     for i, line in enumerate(lines):
-        tols = np.mean(np.array([z for x, y, z in line.coords]))  * ratio
+        tols = np.mean(np.array([z for x, y, z in line.coords]))  * snap_arc_reso_ratio
         line_bufs.append(line.buffer(tols))
-        tols = np.mean(np.array([z for x, y, z in line.coords]))  * ratio * 0.2
+        tols = np.mean(np.array([z for x, y, z in line.coords]))  * snap_arc_reso_ratio * 0.2
         line_bufs_small.append(line.buffer(tols))
 
     for i, line in enumerate(lines):
@@ -753,7 +736,6 @@ def snap_closeby_lines_global(lines, ratio=0.2):
         points = [Point(x, y, z) for x, y, z in line.coords]
 
         for j, point in enumerate(points):
-            tolerance = point.coords[0][2] * ratio
             if j == 0 or j == len(points) - 1:  # endpoints
                 # check if endpoints are connected to any neighboring line
                 if len(updownstreams[i][min(j, 1)]) == 0: # hanging endpoints, remove the entire line;
@@ -782,11 +764,11 @@ def snap_closeby_lines_global(lines, ratio=0.2):
                 lines[i] = LineString(new_points)
             else:
                 lines[i] = None
-    
+
     lines = [line for line in lines if line is not None]
     lines = [line for line in gpd.GeoDataFrame(geometry=lines).unary_union.geoms]
     return lines
-    
+
 def CloseArcs(polylines: gpd.GeoDataFrame):
     '''
     Close polylines whose endpoints are not connected to other polylines.
@@ -911,12 +893,12 @@ def clean_intersections(arcs=None, target_polygons=None, snap_points: np.ndarray
 
     return [arc for arc in cleaned_arcs]
 
-def clean_arcs(arcs, clean_reso_ratio, real_clean=True):
+def clean_arcs(arcs, snap_point_reso_ratio, snap_arc_reso_ratio, real_clean=True):
     print('cleaning all arcs iteratively ...')
 
     # snap with a smaller threshold in the first few iterations to avoid snapping to a further point
     progressive_ratio = np.array([0.2, 0.4, 0.8, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0])
-    for i, ratio in enumerate(clean_reso_ratio * progressive_ratio):
+    for i, ratio in enumerate(snap_point_reso_ratio * progressive_ratio):
         print(f'Iterration {i}: cleaning with ratio = {ratio}')
         arc_points = Geoms_XY(geom_list=arcs, crs='epsg:4326', add_z=True)
 
@@ -924,15 +906,17 @@ def clean_arcs(arcs, clean_reso_ratio, real_clean=True):
         if real_clean:
             arc_points.snap_to_self(tolerance=2e-5)  # in degrees, roughly 2m
 
-        xyz, nsnap = snap_closeby_points_global(arc_points.xy, clean_reso_ratio=clean_reso_ratio)
-        if nsnap == 0:  # no more snapping
+        xyz, nsnap = snap_closeby_points_global(arc_points.xy, snap_point_reso_ratio=snap_point_reso_ratio)
+
+        if nsnap == 0 and progressive_ratio[i] == max(progressive_ratio):  # no more snapping
             break
+
         arc_points.update_coords(xyz)
         arcs_gdf = gpd.GeoDataFrame({'index': range(len(arcs)),'geometry': arc_points.geom_list})
 
         arcs = [arc for arc in arcs_gdf.geometry.unary_union.geoms]
         if real_clean:
-            arcs = snap_closeby_lines_global(arcs)
+            arcs = snap_closeby_lines_global(arcs, snap_arc_reso_ratio=snap_arc_reso_ratio)
     if i > len(progressive_ratio):
         print(f'warning: cleaning terminated prematurely after {i} iterations')
     # arcs, arcs_gdf = CloseArcs(arcs_gdf)
@@ -1127,8 +1111,9 @@ def make_river_map(
         i_DEM_cache = True, selected_thalweg = None,
         MapUnit2METER = 1, river_threshold = (5, 400), min_arcs = 3,
         outer_arcs_positions = (), length_width_ratio = 6.0,
-        i_blast_intersection = False, blast_radius_scale = 0.4, bomb_radius_coef = 0.3,
-        clean_reso_ratio = 0.2, i_close_poly = True, i_smooth_banks = True,
+        i_blast_intersection = False, blast_radius_scale = 0.0, bomb_radius_coef = 0.3,
+        snap_point_reso_ratio = 0.3, snap_arc_reso_ratio = 0.2,
+        i_close_poly = True, i_smooth_banks = True,
         output_prefix = '', mpi_print_prefix = '', i_OCSMesh = False, i_DiagnosticOutput = False,
         i_pseudo_channel = 0, pseudo_channel_width = 18, nrow_pseudo_channel = 4,
     ):
@@ -1154,7 +1139,8 @@ def make_river_map(
     - i_blast_intersection: whether to replace intersecting arcs (often noisy) at river intersections with scatter points (cleaner)
     - blast_radius_scale:  coef controlling the blast radius at intersections, a larger number leads to more intersection features being deleted
     - bomb_radius_coef:  coef controlling the spacing among intersection joints, a larger number leads to sparser intersection joints
-    - clean_reso_ratio:  scaling the threshold of the cleaning process; a negtive number means absolute distance value
+    - snap_point_reso_ratio:  scaling the threshold of the point snapping; a negtive number means absolute distance value
+    - snap_arc_reso_ratio:  scaling the threshold of the arc snapping; a negtive number means absolute distance value
     - i_DEM_cache : Whether or not to read DEM info from cache.
         Reading from original *.tif files can be slow, so the default option is True
     - i_OCSMesh: Whether or not to generate outputs to be used as inputs to OCSMesh.
@@ -1551,7 +1537,7 @@ def make_river_map(
     if len(total_arcs_cleaned) > 0:
         if output_prefix == '':  # clean river intersections if in serial mode
             total_arcs_cleaned = clean_intersections(arcs=total_arcs_cleaned, target_polygons=bomb_polygons, snap_points=bombed_xyz, i_OCSMesh=i_OCSMesh)
-            total_arcs_cleaned = clean_arcs(arcs=total_arcs_cleaned, clean_reso_ratio=clean_reso_ratio)
+            total_arcs_cleaned = clean_arcs(arcs=total_arcs_cleaned, snap_point_reso_ratio=snap_point_reso_ratio, snap_arc_reso_ratio=snap_arc_reso_ratio)
         else:  # if in parallel mode, defer river intersections until merging is complete
             pass
     else:
