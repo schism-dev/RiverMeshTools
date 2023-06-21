@@ -917,6 +917,7 @@ def clean_arcs(arcs, snap_point_reso_ratio, snap_arc_reso_ratio, real_clean=True
         arcs = [arc for arc in arcs_gdf.geometry.unary_union.geoms]
         if real_clean:
             arcs = snap_closeby_lines_global(arcs, snap_arc_reso_ratio=snap_arc_reso_ratio)
+
     if i > len(progressive_ratio):
         print(f'warning: cleaning terminated prematurely after {i} iterations')
     # arcs, arcs_gdf = CloseArcs(arcs_gdf)
@@ -1537,9 +1538,9 @@ def make_river_map(
     if len(total_arcs_cleaned) > 0:
         if output_prefix == '':  # clean river intersections if in serial mode
             total_arcs_cleaned = clean_intersections(arcs=total_arcs_cleaned, target_polygons=bomb_polygons, snap_points=bombed_xyz, i_OCSMesh=i_OCSMesh)
-            total_arcs_cleaned = clean_arcs(arcs=total_arcs_cleaned, snap_point_reso_ratio=snap_point_reso_ratio, snap_arc_reso_ratio=snap_arc_reso_ratio)
         else:  # if in parallel mode, defer river intersections until merging is complete
             pass
+        total_arcs_cleaned = clean_arcs(arcs=total_arcs_cleaned, snap_point_reso_ratio=snap_point_reso_ratio, snap_arc_reso_ratio=snap_arc_reso_ratio)
     else:
         print(f'{mpi_print_prefix} Warning: total_arcs empty')
 
