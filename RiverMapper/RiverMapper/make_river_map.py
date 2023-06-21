@@ -37,12 +37,26 @@ np.seterr(all='raise')
 class Config_make_river_map():
     '''A class to handle the configuration of the river map generation,
     i.e., processing the parameters for the function make_river_map()
-    and storing the factory settings for the river map generation.'''
+    and storing the factory settings for the river map generation.
+    Note that only optional parameters are handled here,
+    users should still provide the required inputs (paths to necessary files)
+    for the function make_river_map().
+
+    Use unpacking to pass the optional parameters to the function make_river_map(),
+    Example usage:
+    make_river_map(
+        tif_fnames = ['./Inputs/DEMs/GA_dem_merged_ll.tif'],
+        thalweg_shp_fname = './Inputs/Shapefiles/GA_local.shp',
+        output_dir = './Outputs/',
+         **Config_make_river_map.OuterArcs().optional,
+    )
+    '''
     def __init__(self,
         i_DEM_cache = True, selected_thalweg = None,
         MapUnit2METER = 1, river_threshold = (5, 400), min_arcs = 3,
         outer_arcs_positions = (), length_width_ratio = 6.0,
-        i_blast_intersection = False, blast_radius_scale = 0.0, bomb_radius_coef = 0.3,
+        i_blast_intersection = False, blast_radius_scale = 0.5, bomb_radius_coef = 0.3,
+        i_real_clean = False,
         i_close_poly = True, i_smooth_banks = True,
         snap_point_reso_ratio = 0.3, snap_arc_reso_ratio = 0.2,
         output_prefix = '', mpi_print_prefix = '', i_OCSMesh = False, i_DiagnosticOutput = False,
@@ -60,6 +74,7 @@ class Config_make_river_map():
             'length_width_ratio': length_width_ratio,
             'i_close_poly': i_close_poly,
             'i_blast_intersection': i_blast_intersection,
+            'i_real_clean': i_real_clean,
             'blast_radius_scale': blast_radius_scale,
             'bomb_radius_coef': bomb_radius_coef,
             'snap_point_reso_ratio': snap_point_reso_ratio,
@@ -78,6 +93,34 @@ class Config_make_river_map():
         '''Small-scale river curvatures may not be exactly followed,
         but channel connectivity is still preserved.'''
         return cls(length_width_ratio = 30.0)
+
+    @classmethod
+    def OuterArcs(cls):
+        '''
+        Outer arcs are generated at the specified positions parallel to the bank arcs
+        and on both sides of the river.
+        The values of outer_arcs_positions are the relative posititions of the river width,
+        '''
+        return cls(outer_arcs_positions = (0.1, 0.2), i_real_clean = False)
+    
+    @classmethod
+    def BombedIntersections(cls):
+        '''
+        Blast intersection arcs and insert feature points to pave river confluence.
+        Note that an additional output file "intersection_joints.map" will be generated;
+        this file contains the coordinates of the intersection points.
+        '''
+        return cls(i_blast_intersection = True, blast_radius_scale = 0.5, bomb_radius_coef = 0.3)
+
+    @classmethod
+    def FurtherCleanIntersections(cls):
+        '''
+        Compared to the default parameter settings, which only snap close-by points,
+        this option (i_real_clean = True) further cleans nearby arcs closer than
+        the threshold (snap_arc_reso_ratio * river width).
+        However, the efficiency still needs to be improved.
+        '''
+        return cls(blast_radius_scale = 0.0, i_real_clean = True)
 
     @classmethod
     def Levees(cls):
@@ -206,6 +249,7 @@ class Geoms_XY():
         # Get the unique rows
         new_xyz = self.xy[unique_rows, :]
         self.snap_to_points(new_xyz)
+
 
 def moving_average(a, n=10, self_weights=0):
     if len(a) <= n:
@@ -893,7 +937,7 @@ def clean_intersections(arcs=None, target_polygons=None, snap_points: np.ndarray
 
     return [arc for arc in cleaned_arcs]
 
-def clean_arcs(arcs, snap_point_reso_ratio, snap_arc_reso_ratio, real_clean=True):
+def clean_arcs(arcs, snap_point_reso_ratio, snap_arc_reso_ratio, i_real_clean=False):
     print('cleaning all arcs iteratively ...')
 
     # snap with a smaller threshold in the first few iterations to avoid snapping to a further point
@@ -903,7 +947,7 @@ def clean_arcs(arcs, snap_point_reso_ratio, snap_arc_reso_ratio, real_clean=True
         arc_points = Geoms_XY(geom_list=arcs, crs='epsg:4326', add_z=True)
 
         # pre-cleaning
-        if real_clean:
+        if i_real_clean:
             arc_points.snap_to_self(tolerance=2e-5)  # in degrees, roughly 2m
 
         xyz, nsnap = snap_closeby_points_global(arc_points.xy, snap_point_reso_ratio=snap_point_reso_ratio)
@@ -915,7 +959,7 @@ def clean_arcs(arcs, snap_point_reso_ratio, snap_arc_reso_ratio, real_clean=True
         arcs_gdf = gpd.GeoDataFrame({'index': range(len(arcs)),'geometry': arc_points.geom_list})
 
         arcs = [arc for arc in arcs_gdf.geometry.unary_union.geoms]
-        if real_clean:
+        if i_real_clean:
             arcs = snap_closeby_lines_global(arcs, snap_arc_reso_ratio=snap_arc_reso_ratio)
 
     if i > len(progressive_ratio):
@@ -1112,7 +1156,8 @@ def make_river_map(
         i_DEM_cache = True, selected_thalweg = None,
         MapUnit2METER = 1, river_threshold = (5, 400), min_arcs = 3,
         outer_arcs_positions = (), length_width_ratio = 6.0,
-        i_blast_intersection = False, blast_radius_scale = 0.0, bomb_radius_coef = 0.3,
+        i_blast_intersection = False, blast_radius_scale = 0.5, bomb_radius_coef = 0.3,
+        i_real_clean = False,
         snap_point_reso_ratio = 0.3, snap_arc_reso_ratio = 0.2,
         i_close_poly = True, i_smooth_banks = True,
         output_prefix = '', mpi_print_prefix = '', i_OCSMesh = False, i_DiagnosticOutput = False,
@@ -1181,6 +1226,14 @@ def make_river_map(
     outer_arcs_positions = np.array(outer_arcs_positions).reshape(-1, )  # example: [0.1, 0.2]
     if np.any(outer_arcs_positions <= 0.0):
         raise ValueError('outer arcs position must > 0, a pair of arcs (one on each side of the river) will be placed for each position value')
+    if len(outer_arcs_positions) > 0:  # limit cleaning threshold so that outer arcs are not removed
+        min_snap_ratio = np.min(outer_arcs_positions) * 0.8
+        if snap_point_reso_ratio > min_snap_ratio:
+            print(f'{mpi_print_prefix} snap_point_reso_ratio {snap_point_reso_ratio} is too large for outer arcs, reset to {min_snap_ratio}')
+            snap_point_reso_ratio = min_snap_ratio
+        if snap_arc_reso_ratio > min_snap_ratio:
+            print(f'{mpi_print_prefix} snap_arc_reso_ratio {snap_arc_reso_ratio} is too large for outer arcs, reset to {min_snap_ratio}')
+            snap_arc_reso_ratio = min_snap_ratio
 
     # maximum number of arcs to resolve a channel (including bank arcs, inner arcs and outer arcs)
     max_nrow_arcs = width2narcs(river_threshold[-1], min_arcs=min_arcs) + 2 * outer_arcs_positions.size
@@ -1540,7 +1593,10 @@ def make_river_map(
             total_arcs_cleaned = clean_intersections(arcs=total_arcs_cleaned, target_polygons=bomb_polygons, snap_points=bombed_xyz, i_OCSMesh=i_OCSMesh)
         else:  # if in parallel mode, defer river intersections until merging is complete
             pass
-        total_arcs_cleaned = clean_arcs(arcs=total_arcs_cleaned, snap_point_reso_ratio=snap_point_reso_ratio, snap_arc_reso_ratio=snap_arc_reso_ratio)
+        total_arcs_cleaned = clean_arcs(
+            arcs=total_arcs_cleaned, i_real_clean=i_real_clean,
+            snap_point_reso_ratio=snap_point_reso_ratio, snap_arc_reso_ratio=snap_arc_reso_ratio
+        )
     else:
         print(f'{mpi_print_prefix} Warning: total_arcs empty')
 
@@ -1553,21 +1609,23 @@ def make_river_map(
         SMS_MAP(arcs=bank_arcs_final.reshape((-1, 1))).writer(filename=f'{output_dir}/{output_prefix}bank_final.map')
         del bank_arcs_final
 
-        if not i_blast_intersection:
-            if len(bomb_polygons) > 0:
-                gpd.GeoDataFrame(
-                    index=range(len(bomb_polygons)), crs='epsg:4326', geometry=bomb_polygons
-                ).to_file(filename=f'{output_dir}/{output_prefix}bomb_polygons.shp', driver="ESRI Shapefile")
-            else:
-                print(f'{mpi_print_prefix} Warning: bomb_polygons empty')
-            del bomb_polygons[:]; del bomb_polygons
+        if len(bomb_polygons) > 0:
+            gpd.GeoDataFrame(
+                index=range(len(bomb_polygons)), crs='epsg:4326', geometry=bomb_polygons
+            ).to_file(filename=f'{output_dir}/{output_prefix}bomb_polygons.shp', driver="ESRI Shapefile")
+        else:
+            print(f'{mpi_print_prefix} Warning: bomb_polygons empty')
+        del bomb_polygons[:]; del bomb_polygons
 
         if len(total_arcs_cleaned) > 0:
             SMS_MAP(arcs=geos2SmsArcList(geoms=total_arcs_cleaned)).writer(filename=f'{output_dir}/{output_prefix}total_arcs.map')
         else:
             print(f'{mpi_print_prefix} Warning: total_sms_arcs_cleaned empty')
 
-        SMS_MAP(detached_nodes=bombed_xyz).writer(f'{output_dir}/{output_prefix}total_intersection_joints.map')
+        if i_blast_intersection:
+            SMS_MAP(detached_nodes=bombed_xyz).writer(f'{output_dir}/{output_prefix}total_intersection_joints.map')
+            gpd.GeoDataFrame(geometry=gpd.points_from_xy(bombed_xyz[:, 0], bombed_xyz[:, 1]), crs='epsg:4326').\
+                to_file(f'{output_dir}/{output_prefix}total_intersection_joints.shp', driver="ESRI Shapefile") 
 
         total_arcs_cleaned_polys = [poly for poly in polygonize(gpd.GeoSeries(total_arcs_cleaned))]
         if len(total_arcs_cleaned_polys) > 0:

@@ -238,7 +238,7 @@ def river_map_mpi_driver(
                 idummy=river_map_config.optional['i_pseudo_channel']==1,
             )
         total_arcs_cleaned = clean_arcs(
-            total_arcs_cleaned,
+            total_arcs_cleaned, i_real_clean=river_map_config.optional['i_real_clean'],
             snap_point_reso_ratio=river_map_config.optional['snap_point_reso_ratio'],
             snap_arc_reso_ratio=river_map_config.optional['snap_arc_reso_ratio'],
         )
