@@ -32,7 +32,7 @@ from RiverMapper.river_map_tif_preproc import Tif2XYZ, get_elev_from_tiles
 from RiverMapper.util import silentremove
 
 
-np.seterr(all='raise')
+# np.seterr(all='raise')  # Needs more attention, see Issue #1
 
 class Config_make_river_map():
     '''A class to handle the configuration of the river map generation,
@@ -102,7 +102,7 @@ class Config_make_river_map():
         The values of outer_arcs_positions are the relative posititions of the river width,
         '''
         return cls(outer_arcs_positions = (0.1, 0.2), i_real_clean = False)
-    
+
     @classmethod
     def BombedIntersections(cls):
         '''
@@ -1625,7 +1625,7 @@ def make_river_map(
         if i_blast_intersection:
             SMS_MAP(detached_nodes=bombed_xyz).writer(f'{output_dir}/{output_prefix}total_intersection_joints.map')
             gpd.GeoDataFrame(geometry=gpd.points_from_xy(bombed_xyz[:, 0], bombed_xyz[:, 1]), crs='epsg:4326').\
-                to_file(f'{output_dir}/{output_prefix}total_intersection_joints.shp', driver="ESRI Shapefile") 
+                to_file(f'{output_dir}/{output_prefix}total_intersection_joints.shp', driver="ESRI Shapefile")
 
         total_arcs_cleaned_polys = [poly for poly in polygonize(gpd.GeoSeries(total_arcs_cleaned))]
         if len(total_arcs_cleaned_polys) > 0:
