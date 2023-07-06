@@ -1354,6 +1354,7 @@ def make_river_map(
     bank_arcs_final = np.empty((len(thalwegs), 2), dtype=object)
     cc_arcs = np.empty((len(thalwegs), 2), dtype=object)  # [, 0] is head, [, 1] is tail
     river_arcs = np.empty((len(thalwegs), max_nrow_arcs), dtype=object)
+    river_arcs1 = np.empty((len(thalwegs), max_nrow_arcs), dtype=object)
     blast_radius = -np.ones((len(thalwegs), 2), dtype=float)
     blast_center = np.zeros((len(thalwegs), 2), dtype=complex)
     smoothed_thalwegs = [None] * len(thalwegs)
@@ -1501,6 +1502,7 @@ def make_river_map(
             for k, [x_river_arc, y_river_arc] in enumerate(zip(x_river_arcs, y_river_arcs)):
                 line = np.c_[x_river_arc, y_river_arc]
                 if sum(valid_points) > 0:
+                    n_valid_points = sum(valid_points)
                     # snap vertices too close to each other
                     line[valid_points, :] = snap_vertices(line[valid_points, :], width[valid_points] * 0.3)  # optional: thalweg_resolution*0.75
 
@@ -1512,6 +1514,7 @@ def make_river_map(
                         bank_arcs_final[i, 1] = SMS_ARC(points=np.c_[line[valid_points, 0], line[valid_points, 1], z_centerline[valid_points]], src_prj='cpp')
                     # save inner arcs
                     river_arcs[i, k] = SMS_ARC(points=np.c_[line[valid_points, 0], line[valid_points, 1], z_centerline[valid_points]], src_prj='cpp')
+                    river_arcs1[i, k] = SMS_ARC(points=np.c_[line[valid_points, 0], line[valid_points, 1], np.ones((n_valid_points, 1)) * this_nrow_arcs], src_prj='cpp', proj_z=False)
                     # save centerline
                     if k == int(len(x_river_arcs)/2):
                         centerlines[i] = SMS_ARC(points=np.c_[line[valid_points, 0], line[valid_points, 1], z_centerline[valid_points]], src_prj='cpp')
@@ -1548,6 +1551,7 @@ def make_river_map(
             SMS_MAP(arcs=bank_arcs_raw.reshape((-1, 1))).writer(filename=f'{output_dir}/{output_prefix}bank_raw.map')
             SMS_MAP(arcs=cc_arcs.reshape((-1, 1))).writer(filename=f'{output_dir}/{output_prefix}cc_arcs.map')
             SMS_MAP(arcs=river_arcs.reshape((-1, 1))).writer(filename=f'{output_dir}/{output_prefix}river_arcs.map')
+            SMS_MAP(arcs=river_arcs1.reshape((-1, 1))).writer(filename=f'{output_dir}/{output_prefix}river_arcs1.map')
             SMS_MAP(detached_nodes=bombed_points).writer(filename=f'{output_dir}/{output_prefix}relax_points.map')
             SMS_MAP(arcs=smoothed_thalwegs).writer(filename=f'{output_dir}/{output_prefix}smoothed_thalweg.map')
             SMS_MAP(arcs=redistributed_thalwegs_pre_correction).writer(filename=f'{output_dir}/{output_prefix}redist_thalweg_pre_correction.map')
@@ -1622,10 +1626,10 @@ def make_river_map(
         else:
             print(f'{mpi_print_prefix} Warning: total_sms_arcs_cleaned empty')
 
-        if i_blast_intersection:
-            SMS_MAP(detached_nodes=bombed_xyz).writer(f'{output_dir}/{output_prefix}total_intersection_joints.map')
-            gpd.GeoDataFrame(geometry=gpd.points_from_xy(bombed_xyz[:, 0], bombed_xyz[:, 1]), crs='epsg:4326').\
-                to_file(f'{output_dir}/{output_prefix}total_intersection_joints.shp', driver="ESRI Shapefile")
+        # needed not only for bombing but also for cleaning too, so always write
+        SMS_MAP(detached_nodes=bombed_xyz).writer(f'{output_dir}/{output_prefix}total_intersection_joints.map')
+        gpd.GeoDataFrame(geometry=gpd.points_from_xy(bombed_xyz[:, 0], bombed_xyz[:, 1]), crs='epsg:4326').\
+            to_file(f'{output_dir}/{output_prefix}total_intersection_joints.shp', driver="ESRI Shapefile")
 
         total_arcs_cleaned_polys = [poly for poly in polygonize(gpd.GeoSeries(total_arcs_cleaned))]
         if len(total_arcs_cleaned_polys) > 0:
