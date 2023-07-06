@@ -2414,7 +2414,7 @@ class dem(object):
                         total += 1
                         coords = river[idxs[j-1]+1:idxs[j]]
                         branch = LineString(coords)
-                        branches.append({'reach_id': total, 'geometry': branch})
+                        branches.append({'feature_id': total, 'geometry': branch})
 
                         if len(mainchannel.intersection(branch).coords[:]) > 0:
                             intersections.append(mainchannel.intersection(branch))
