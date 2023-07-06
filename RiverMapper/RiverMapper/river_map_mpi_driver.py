@@ -47,6 +47,8 @@ def merge_outputs(output_dir):
         total_intersection_joints = total_intersection_joints.detached_nodes
 
     total_river_map = merge_maps(f'{output_dir}/*river_arcs.map', merged_fname=f'{output_dir}/total_river_arcs.map')
+
+    total_river_arcs = None
     if total_river_map is not None:
         total_river_arcs = total_river_map.arcs
 
