@@ -1,5 +1,6 @@
 #!/usr/bin/env pythonw
 #this is the python library used to extracted river network from DEM
+import numpy as np
 import richdem as rd
 from osgeo import gdal
 import pandas as pd
@@ -278,8 +279,9 @@ class dem(object):
         self.info.depth_limit=depth_limit
 
         #divide the domain into subdomains
-        nsub=max(around(nsize/subdomain_size),1);
-        nx=max(int(round(sqrt(nsub))),1); ny=max(int(nsub/nx),1);
+        nsub=np.max([around(nsize/subdomain_size),1])
+        nx=np.max([int(round(sqrt(nsub))),1]) 
+        ny=np.max([int(nsub/nx),1])
         dy0=int(floor(ym/ny)); dx0=int(floor(xm/nx))
 
         self.info.is_subdomain=False
@@ -453,40 +455,40 @@ class dem(object):
                 slim=[-99999,99999,-99999,99999]
                 #bottom side
                 if snb[0]!=None and snb[1]!=None:
-                    slim[2]=max(slim[2],diminfo0[snb[0]][3],diminfo0[snb[1]][3])
+                    slim[2]=np.max([slim[2],diminfo0[snb[0]][3],diminfo0[snb[1]][3]])
 
                 #right side
                 if snb[1]!=None and snb[2]!=None:
-                    slim[1]=min(slim[1],diminfo0[snb[1]][0],diminfo0[snb[2]][0])
+                    slim[1]=np.min([slim[1],diminfo0[snb[1]][0],diminfo0[snb[2]][0]])
 
                 #upper side
                 if snb[2]!=None and snb[3]!=None:
-                    slim[3]=min(slim[3],diminfo0[snb[2]][2],diminfo0[snb[3]][2])
+                    slim[3]=np.min([slim[3],diminfo0[snb[2]][2],diminfo0[snb[3]][2]])
 
                 #left side
                 if snb[0]!=None and snb[3]!=None:
-                    slim[0]=max(slim[0],diminfo0[snb[0]][1],diminfo0[snb[3]][1])
+                    slim[0]=np.max([slim[0],diminfo0[snb[0]][1],diminfo0[snb[3]][1]])
 
                 #this part needed to be add manually if results are not correct
                 if sum(array(snb)!=None)==1:
                    #lower left corner
                    if snb[0]!=None:
-                      slim[2]=max(slim[2],diminfo0[snb[0]][3])
+                      slim[2]=np.max([slim[2],diminfo0[snb[0]][3]])
 
                    #lower right corner
                    if snb[1]!=None:
-                      slim[1]=min(slim[1],diminfo0[snb[1]][0])
+                      slim[1]=np.min([slim[1],diminfo0[snb[1]][0]])
 
                    #upper right corner
                    if snb[2]!=None:
                       if ids[i] in ['08',]:
-                        slim[3]=min(slim[3],diminfo0[snb[2]][2])
+                        slim[3]=np.min([slim[3],diminfo0[snb[2]][2]])
                       else:
-                        slim[1]=min(slim[1],diminfo0[snb[2]][0])
+                        slim[1]=np.min([slim[1],diminfo0[snb[2]][0]])
 
                    #upper left corner
                    if snb[3]!=None:
-                      slim[3]=min(slim[3],diminfo0[snb[3]][2])
+                      slim[3]=np.min([slim[3],diminfo0[snb[3]][2]])
                 slims.append(slim)
 
             #update new xy limits
@@ -780,7 +782,7 @@ class dem(object):
         ds=self.info.ds; ym,xm=ds; nsize=prod(ds); nlim=subdomain_size
         #dir=zeros(nsize).astype('int32'); nodata=self.info.nodata
         dir=zeros(nsize, dtype=int32); nodata=self.info.nodata
-        nsubdomain=int(max(round(nsize/nlim),1))
+        nsubdomain=int(np.max([round(nsize/nlim),1]))
 
         offsets_all=array([1,-xm,-1,xm, -xm+1,-xm-1,xm-1,xm+1])
         ndirs_all=array([1, 64, 16, 4, 128, 32, 8,  2])
