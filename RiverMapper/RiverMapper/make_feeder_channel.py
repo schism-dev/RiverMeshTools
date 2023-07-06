@@ -1,24 +1,55 @@
 import numpy as np
-from pylib import schism_grid
-from schism_py_pre_post.Grid.SMS import get_all_points_from_shp, \
-    SMS_ARC, SMS_MAP, curvature, cpp2lonlat, lonlat2cpp, dl_cpp2lonlat, \
-    get_perpendicular_angle, merge_maps
+from RiverMapper.SMS import SMS_MAP, SMS_ARC, get_perpendicular_angle
 import pickle
 from time import time
+import geopandas as gpd
 
 class Feeder():
     def __init__(self, points_x:np.ndarray, points_y:np.ndarray, base_id) -> None:
         self.points_x, self.points_y = points_x, points_y
         self.head = np.c_[np.mean(points_x[:, 0]), np.mean(points_y[:, 0])]
 
-        base_id = min(self.points_x.shape[1], base_id)
+        base_id = min(self.points_x.shape[1]-1, base_id)
         self.base = np.c_[np.mean(points_x[:, base_id]), np.mean(points_y[:, base_id])]
 
+def find_inlets_outlets2(line_map:SMS_MAP, boundary_shp:str):
+    '''
+    Find the index of the last inlet point (index is outside the polygon, index-1 is polygon) of all rivers.
+    The projection of the river and the polygon must be consistent.
+    '''
+    timer = time()
+
+    if not hasattr(line_map, 'l2g') or not hasattr(line_map, 'xyz'):
+        line_map.get_xyz()
+    # ------------------------- find in-grid river points ---------------------------
+    polygon_shapefile = gpd.read_file(boundary_shp)
+    point_array = line_map.xyz[:, :2]
+    points_gdf = gpd.GeoDataFrame(geometry=gpd.points_from_xy(point_array[:, 0], point_array[:, 1]), crs='EPSG:4326')
+    points_within_polygon = gpd.sjoin(points_gdf, polygon_shapefile, predicate='within')
+    inside = points_gdf.index.isin(points_within_polygon.index)
+    print(f'finding inside points took {time()-timer} seconds'); timer = time()
+
+    inlets = -np.ones(len(line_map.l2g), dtype=int)
+    outlets = -np.ones(len(line_map.l2g), dtype=int)
+    for i, ids in enumerate(line_map.l2g):
+        arc_points_inside = inside[ids]
+        if np.any(arc_points_inside) and not np.all(arc_points_inside):  # intersecting with mesh boundary
+            inlet = np.argwhere(arc_points_inside==0)[0][0]  # last inlet, assuming the river points are arranged from down to upstream
+            if inlet > 0:
+                inlets[i] = inlet
+            outlet = np.argwhere(arc_points_inside)[0][0]  # last inlet, assuming the river points are arranged from down to upstream
+            if outlet > 0:
+                outlets[i] = outlet
+
+    print(f'{len(line_map.l2g)} rivers, {sum(inlets>0)} inlets, {sum(outlets>0)} outlets')
+    return inlets, outlets
+
+'''
+Deprecated, asking for a hgrid object is not convenient. 
 def find_inlets_outlets(line_map:SMS_MAP, gd:schism_grid):
-    '''
-    Find the index of the last inlet point (index is outside the grid, index-1 is inside) of all rivers.
-    The projection of the river and the hgrid must be consistent.
-    '''
+    # Find the index of the last inlet point (index is outside the grid, index-1 is inside) of all rivers.
+    # The projection of the river and the hgrid must be consistent.
+
     timer = time()
 
     if not hasattr(line_map, 'l2g') or not hasattr(line_map, 'xyz'):
@@ -45,31 +76,39 @@ def find_inlets_outlets(line_map:SMS_MAP, gd:schism_grid):
 
     print(f'{len(line_map.l2g)} rivers, {sum(inlets>0)} inlets, {sum(outlets>0)} outlets')
     return inlets, outlets
+'''
 
 if __name__ == "__main__":
 
-    output_dir = '/sciclone/schism10/feiye/STOFS3D-v5/Inputs/v14/Parallel/SMS_proj/feeder/'
+    # ------------------- inputs -------------------
+    # output_dir = '/sciclone/schism10/feiye/STOFS3D-v5/Inputs/v14/Parallel/SMS_proj/feeder/'
+    # rivermap_fname = f'{output_dir}/total_inner_arcs.map'
+    # grid_fname = '/sciclone/schism10/feiye/STOFS3D-v5/Inputs/v14/Parallel/SMS_proj/feeder/hgrid.ll'
+    output_dir = '/sciclone/schism10/Hgrid_projects/STOFS3D-V6/v16.2/Feeder/'
+    rivermap_fname = f'/sciclone/schism10/Hgrid_projects/STOFS3D-V6/v16.2/Feeder/total_river_arcs1.map'
+    grid_fname = '/sciclone/schism10/Hgrid_projects/STOFS3D-V6/v16.2/Feeder/hgrid.ll'
+    grid_boundary_shp = '/sciclone/schism10/Hgrid_projects/STOFS3D-V6/v16/Shapefiles/boundary.shp'
+    # -------------------- end inputs ----------------
 
     timer = time()
 
-    rivermap_fname = f'{output_dir}/total_inner_arcs.map'
-    grid_fname = '/sciclone/schism10/feiye/STOFS3D-v5/Inputs/v14/Parallel/SMS_proj/feeder/hgrid.ll'
-
-    river_map = SMS_MAP(rivermap_fname)
-    xyz, l2g = river_map.get_xyz()
-    with open('river_map.pkl', 'wb') as file:
-        pickle.dump([river_map, xyz, l2g], file)
-
-    # with open('river_map.pkl', 'rb') as file:
-    #     river_map, xyz, l2g = pickle.load(file)
+    # try loading cache first
+    try:
+        with open(f'{rivermap_fname}.pkl', 'rb') as file:
+            river_map, xyz, l2g = pickle.load(file)
+    except:
+        river_map = SMS_MAP(rivermap_fname)
+        xyz, l2g = river_map.get_xyz()
+        with open(f'{rivermap_fname}.pkl', 'wb') as file:
+            pickle.dump([river_map, xyz, l2g], file)
 
     n_rivers = 0
     narcs_rivers = -np.ones((0, 1), dtype=int)  # number of river arcs for each river
     n = 0
     centerlines = []
     while (n < len(river_map.arcs)):
-        # Number of river arcs (number of lines in the along-river direction)
-        # is recorded in the integer part of the z-field of the river_map.
+        # Number of river arcs (this_nrow_arcs, i.e., number of points to discretize a cross-section)
+        # is recorded in the integer part of the z-field of the river_map1.
         # Get narcs from the first point of the first arc of a river
         narcs = int(river_map.arcs[n].points[0, -1].reshape(1, 1))
 
@@ -89,20 +128,19 @@ if __name__ == "__main__":
 
     print(f'reading river map took {time()-timer} seconds'); timer = time()
 
-    gd = schism_grid(grid_fname)
-    # with open(grid_fname, 'rb') as file:
-    #     gd = pickle.load(file)
-    # gd.x, gd.y = gd.lon, gd.lat
-    print(f'reading hgrid took {time()-timer} seconds'); timer = time()
+    # deprecated, using a polygon instead of a grid is more flexible
+    # try:
+    #     with open(f'{grid_fname}.pkl', 'rb') as file:
+    #         gd = pickle.load(file)
+    # except:
+    #     gd = schism_grid(grid_fname)
+    #     with open(f'{grid_fname}.pkl', 'wb') as file:
+    #         pickle.dump(gd, file)
+    # print(f'reading hgrid took {time()-timer} seconds'); timer = time()
+    # inlets, outlets = find_inlets_outlets(line_map=centerline_map, gd=gd)
 
-    inlets, outlets = find_inlets_outlets(line_map=centerline_map, gd=gd)
+    inlets, outlets = find_inlets_outlets2(line_map=centerline_map, boundary_shp=grid_boundary_shp)
     print(f'finding inlets/outlets took {time()-timer} seconds'); timer = time()
-
-    # for testing only
-    # with open('tmp.pkl', 'wb') as file:
-    #     pickle.dump([river_map, centerline_map, n_rivers, narcs_rivers, gd, inlets, outlets], file)
-    # with open('tmp.pkl', 'rb') as file:
-    #    [river_map, centerline_map, n_rivers, narcs_rivers, gd, inlets, outlets] = pickle.load(file)
 
     feeder_channel_extension = np.array([-10.0, -5.0, 0])
     i_inlet_options = [2, 1, 0]
@@ -117,6 +155,8 @@ if __name__ == "__main__":
     # the number of outlet arcs (only considering the base cross-river arc, since no pseudo channel is needed)
     # is set as the same of the number of inlets, but most inlets don't have an outlet
     outlet_arcs = np.empty((n_inlets, 1), dtype=object) # left bank and right bank for each thalweg
+
+    polygon_shapefile = gpd.read_file(grid_boundary_shp)
 
     i = 0; i_river = 0
     n_feeder = 0; n_outlet = 0
@@ -144,10 +184,20 @@ if __name__ == "__main__":
                     xt[:, k] = feeder_base_pts[:, 0] + feeder_channel_length[k] * np.cos(perp)
                     yt[:, k] = feeder_base_pts[:, 1] + feeder_channel_length[k] * np.sin(perp)
 
-                ingrid_feeders = gd.inside_grid(np.c_[xt[:, i_inlet_option+1:len(feeder_channel_extension)].reshape(-1, 1),
-                                                      yt[:, i_inlet_option+1:len(feeder_channel_extension)].reshape(-1, 1)])
+                point_array =  np.c_[xt[:, i_inlet_option:len(feeder_channel_extension)].reshape(-1, 1),
+                                     yt[:, i_inlet_option:len(feeder_channel_extension)].reshape(-1, 1)]
+                if len(point_array) == 0:
+                    break
+                points_gdf = gpd.GeoDataFrame(geometry=gpd.points_from_xy(point_array[:, 0], point_array[:, 1]), crs='EPSG:4326')
+                points_within_polygon = gpd.sjoin(points_gdf, polygon_shapefile, predicate='within')
+                ingrid_feeders = points_gdf.index.isin(points_within_polygon.index)
+
+                # ingrid_feeders = gd.inside_grid(np.c_[xt[:, i_inlet_option+1:len(feeder_channel_extension)].reshape(-1, 1),
+                #                                       yt[:, i_inlet_option+1:len(feeder_channel_extension)].reshape(-1, 1)])
+
                 if sum(ingrid_feeders) == 0:
                     break  # found valid feeder; the worse case is non of the i_inlet_option works, in which case the last one is kept
+
                 print(f'unclean connection at arc {i+1}')
 
             if n_follow > 0:
