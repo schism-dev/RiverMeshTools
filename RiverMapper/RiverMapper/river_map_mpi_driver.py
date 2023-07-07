@@ -15,6 +15,7 @@ from mpi4py import MPI
 from glob import glob
 import numpy as np
 import pickle
+from pathlib import Path
 import geopandas as gpd
 from shapely.ops import polygonize
 from RiverMapper.river_map_tif_preproc import find_thalweg_tile, Tif2XYZ
@@ -117,6 +118,10 @@ def river_map_mpi_driver(
     #                   regardless of the option value (the option only controls cache reading).
     #                   This is usually fast even without reading cache.
     i_grouping_cache = True
+    cache_folder = Path(cache_folder)
+    thalweg_shp_fname = Path(thalweg_shp_fname)
+    output_dir = Path(output_dir)
+    dems_json_file = Path(dems_json_file)
 
     # configurations (parameters) for make_river_map()
     if river_map_config is None:
@@ -135,13 +140,11 @@ def river_map_mpi_driver(
     if rank == 0:
         print(f'A total of {size} core(s) used.')
         silentremove(output_dir)
-        os.makedirs(output_dir, exist_ok=True)
+        output_dir.mkdir(parents=True, exist_ok=True)
 
         if i_grouping_cache:
-            os.makedirs(cache_folder, exist_ok=True)
-            cache_name = cache_folder + \
-                os.path.basename(dems_json_file) + '_' + \
-                os.path.basename(thalweg_shp_fname) + '_grouping.cache'
+            cache_folder.mkdir(parents=True, exist_ok=True)
+            cache_name = Path(f'{cache_folder}/{dems_json_file.name}_{thalweg_shp_fname.name}_grouping.cache')
             try:
                 with open(cache_name, 'rb') as file:
                     print(f'Reading grouping info from cache ...')
