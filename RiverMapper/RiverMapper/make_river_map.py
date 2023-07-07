@@ -29,7 +29,6 @@ import geopandas as gpd
 from RiverMapper.SMS import get_all_points_from_shp, curvature, get_perpendicular_angle
 from RiverMapper.SMS import SMS_ARC, SMS_MAP, cpp2lonlat, lonlat2cpp, dl_cpp2lonlat, dl_lonlat2cpp
 from RiverMapper.river_map_tif_preproc import Tif2XYZ, get_elev_from_tiles
-from RiverMapper.util import silentremove
 
 
 # np.seterr(all='raise')  # Needs more attention, see Issue #1
@@ -1353,8 +1352,8 @@ def make_river_map(
     bank_arcs_raw = np.empty((len(thalwegs), 2), dtype=object)
     bank_arcs_final = np.empty((len(thalwegs), 2), dtype=object)
     cc_arcs = np.empty((len(thalwegs), 2), dtype=object)  # [, 0] is head, [, 1] is tail
-    river_arcs = np.empty((len(thalwegs), max_nrow_arcs), dtype=object)
-    river_arcs1 = np.empty((len(thalwegs), max_nrow_arcs), dtype=object)
+    river_arcs = np.empty((len(thalwegs), max_nrow_arcs), dtype=object)  # for storing arcs, z field is cross-channel resolution
+    river_arcs_extra = np.empty((len(thalwegs), max_nrow_arcs), dtype=object)  # for storing extra info in the z field
     blast_radius = -np.ones((len(thalwegs), 2), dtype=float)
     blast_center = np.zeros((len(thalwegs), 2), dtype=complex)
     smoothed_thalwegs = [None] * len(thalwegs)
@@ -1514,7 +1513,7 @@ def make_river_map(
                         bank_arcs_final[i, 1] = SMS_ARC(points=np.c_[line[valid_points, 0], line[valid_points, 1], z_centerline[valid_points]], src_prj='cpp')
                     # save inner arcs
                     river_arcs[i, k] = SMS_ARC(points=np.c_[line[valid_points, 0], line[valid_points, 1], z_centerline[valid_points]], src_prj='cpp')
-                    river_arcs1[i, k] = SMS_ARC(points=np.c_[line[valid_points, 0], line[valid_points, 1], np.ones((n_valid_points, 1)) * this_nrow_arcs], src_prj='cpp', proj_z=False)
+                    river_arcs_extra[i, k] = SMS_ARC(points=np.c_[line[valid_points, 0], line[valid_points, 1], np.ones((n_valid_points, 1)) * this_nrow_arcs], src_prj='cpp', proj_z=False)
                     # save centerline
                     if k == int(len(x_river_arcs)/2):
                         centerlines[i] = SMS_ARC(points=np.c_[line[valid_points, 0], line[valid_points, 1], z_centerline[valid_points]], src_prj='cpp')
@@ -1551,7 +1550,7 @@ def make_river_map(
             SMS_MAP(arcs=bank_arcs_raw.reshape((-1, 1))).writer(filename=f'{output_dir}/{output_prefix}bank_raw.map')
             SMS_MAP(arcs=cc_arcs.reshape((-1, 1))).writer(filename=f'{output_dir}/{output_prefix}cc_arcs.map')
             SMS_MAP(arcs=river_arcs.reshape((-1, 1))).writer(filename=f'{output_dir}/{output_prefix}river_arcs.map')
-            SMS_MAP(arcs=river_arcs1.reshape((-1, 1))).writer(filename=f'{output_dir}/{output_prefix}river_arcs1.map')
+            SMS_MAP(arcs=river_arcs_extra.reshape((-1, 1))).writer(filename=f'{output_dir}/{output_prefix}river_arcs_extra.map')
             SMS_MAP(detached_nodes=bombed_points).writer(filename=f'{output_dir}/{output_prefix}relax_points.map')
             SMS_MAP(arcs=smoothed_thalwegs).writer(filename=f'{output_dir}/{output_prefix}smoothed_thalweg.map')
             SMS_MAP(arcs=redistributed_thalwegs_pre_correction).writer(filename=f'{output_dir}/{output_prefix}redist_thalweg_pre_correction.map')
@@ -1627,9 +1626,12 @@ def make_river_map(
             print(f'{mpi_print_prefix} Warning: total_sms_arcs_cleaned empty')
 
         # needed not only for bombing but also for cleaning too, so always write
-        SMS_MAP(detached_nodes=bombed_xyz).writer(f'{output_dir}/{output_prefix}total_intersection_joints.map')
-        gpd.GeoDataFrame(geometry=gpd.points_from_xy(bombed_xyz[:, 0], bombed_xyz[:, 1]), crs='epsg:4326').\
-            to_file(f'{output_dir}/{output_prefix}total_intersection_joints.shp', driver="ESRI Shapefile")
+        if len(bombed_xyz) > 0:
+            SMS_MAP(detached_nodes=bombed_xyz).writer(f'{output_dir}/{output_prefix}total_intersection_joints.map')
+            gpd.GeoDataFrame(geometry=gpd.points_from_xy(bombed_xyz[:, 0], bombed_xyz[:, 1]), crs='epsg:4326').\
+                to_file(f'{output_dir}/{output_prefix}total_intersection_joints.shp', driver="ESRI Shapefile")
+        else:
+            print(f'{mpi_print_prefix} Warning: bombed_xyz empty, {output_prefix}total_intersection_joints.map not written')
 
         total_arcs_cleaned_polys = [poly for poly in polygonize(gpd.GeoSeries(total_arcs_cleaned))]
         if len(total_arcs_cleaned_polys) > 0:

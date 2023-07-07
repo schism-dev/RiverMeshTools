@@ -21,6 +21,9 @@ from RiverMapper.river_map_tif_preproc import find_thalweg_tile, Tif2XYZ
 from RiverMapper.make_river_map import make_river_map, clean_intersections, geos2SmsArcList, Geoms_XY, clean_arcs, Config_make_river_map
 from RiverMapper.SMS import merge_maps, SMS_MAP
 from RiverMapper.util import silentremove
+import warnings
+
+warnings.filterwarnings("error", category=UserWarning)
 
 
 def my_mpi_idx(N, size, rank):
@@ -52,7 +55,8 @@ def merge_outputs(output_dir):
     if total_river_map is not None:
         total_river_arcs = total_river_map.arcs
 
-    total_river_map1 = merge_maps(f'{output_dir}/*river_arcs1.map', merged_fname=f'{output_dir}/total_river_arcs1.map')
+    # for feeder channels, "this_nrow_arcs" is saved as z values in the map file
+    merge_maps(f'{output_dir}/*river_arcs_extra.map', merged_fname=f'{output_dir}/total_river_arcs_extra.map')
 
     total_centerlines = merge_maps(f'{output_dir}/*centerlines.map', merged_fname=f'{output_dir}/total_centerlines.map')
     merge_maps(f'{output_dir}/*bank_final*.map', merged_fname=f'{output_dir}/total_banks_final.map')
@@ -78,8 +82,8 @@ def river_map_mpi_driver(
     thalweg_shp_fname='',
     output_dir = './',
     river_map_config = None,
-    thalweg_buffer = 1000,
-    i_DEM_cache = True,
+    min_thalweg_buffer = 1000,
+    cache_folder = './Cache/',
     comm = MPI.COMM_WORLD
 ):
     '''
@@ -95,23 +99,24 @@ def river_map_mpi_driver(
     which are fed to make_river_map.py one at a time
 
     Summary of the input parameters:
-    thalweg_buffer: in meters. This is the search range on either side of the thalweg.
+    river_map_config: Config_make_river_map object to pass the arguments to make_river_map.py
+    min_thalweg_buffer: in meters. This is the minimum search range on either side of the thalweg.
                     Because banks will be searched within this range,
                     its value is needed now to identify parent DEM tiles of each thalweg
-    i_DEM_cache : Whether or not to read DEM info from cache.
-                  Reading from original *.tif files can be a little slower than reading from the *.pkl cache,
-                  so the default option is True
+    cache_folder: folder for saving the cache file for thalweg grouping
     '''
+
+    thalweg_buffer = max(min_thalweg_buffer, river_map_config.optional['river_threshold'][-1])
 
     # deprecated (fast enough without caching)
     i_thalweg_cache = False  # Whether or not to read thalweg info from cache.
                              # The cache file saves coordinates, index, curvature, and direction at all thalweg points
     # i_grouping_cache: Whether or not to read grouping info from cache,
     #                   which is useful when the same DEMs and thalweg_shp_fname are used.
-    #                   A cache file named "dems_json_file + thalweg_shp_fname_grouping.cache" will be saved regardless of the option value.
+    #                   A cache file named "dems_json_file + thalweg_shp_fname_grouping.cache" will be saved
+    #                   regardless of the option value (the option only controls cache reading).
     #                   This is usually fast even without reading cache.
-    i_grouping_cache = True; iValidateCache = False
-    cache_folder = './Cache/'
+    i_grouping_cache = True
 
     # configurations (parameters) for make_river_map()
     if river_map_config is None:
@@ -172,7 +177,13 @@ def river_map_mpi_driver(
     if rank == 0: print('\n---------------------------------caching DEM tiles---------------------------------\n')
     comm.barrier()
 
-    if i_DEM_cache:
+    # Leveraging MPI to cache DEM tiles in parallel.
+    # This is useful when the DEMs are large and there are many of them.
+    # And when there are existing cache files, try reading from them;
+    # if the reading is not successful, then regenerate the cache for the corresponding DEM tiles.
+    # The actual reading of DEM caches is done in make_river_map()
+    # This is why both this driver and make_river_map() have the same i_DEM_cache option
+    if river_map_config.optional['i_DEM_cache']:
         unique_tile_files = []
         for group in tile_groups_files:
             for file in group:
@@ -180,13 +191,12 @@ def river_map_mpi_driver(
                     unique_tile_files.append(file)
         unique_tile_files = np.array(unique_tile_files)
 
-        if iValidateCache:
-            for tif_fname in unique_tile_files[my_mpi_idx(len(unique_tile_files), size, rank)]:
-                _, is_new_cache = Tif2XYZ(tif_fname=tif_fname)
-                if is_new_cache:
-                    print(f'[Rank: {rank} cached DEM {tif_fname}')
-                else:
-                    print(f'[Rank: {rank} validated existing cache for {tif_fname}')
+        for tif_fname in unique_tile_files[my_mpi_idx(len(unique_tile_files), size, rank)[0]]:
+            _, is_new_cache = Tif2XYZ(tif_fname=tif_fname)
+            if is_new_cache:
+                print(f'[Rank: {rank} cached DEM {tif_fname}')
+            else:
+                print(f'[Rank: {rank} validated existing cache for {tif_fname}')
 
     comm.Barrier()
     if rank == 0: print('\n---------------------------------assign groups to each core---------------------------------\n')
@@ -205,19 +215,16 @@ def river_map_mpi_driver(
     for i, (my_group_id, my_tile_group, my_tile_group_thalwegs) in enumerate(zip(my_group_ids, my_tile_groups, my_tile_groups_thalwegs)):
         time_this_group_start = time.time()
         print(f'Rank {rank}: Group {i+1} (global: {my_group_id}) started ...')
-        if True:  # my_group_id in range(0, 200):
-            # update some parameters in the config file
-            river_map_config.optional['output_prefix'] = f'Group_{my_group_id}_{rank}_{i}_'
-            river_map_config.optional['mpi_print_prefix'] = f'[Rank {rank}, Group {i+1} of {len(my_tile_groups)}, global: {my_group_id}] '
-            river_map_config.optional['selected_thalweg'] = my_tile_group_thalwegs
-            make_river_map(
-                tif_fnames = my_tile_group,
-                thalweg_shp_fname = thalweg_shp_fname,
-                output_dir = output_dir,
-                **river_map_config.optional,  # pass all optional parameters with a dictionary
-            )
-        else:
-            pass  # print(f'Rank {rank}: Group {my_group_id} failed')
+        # update some parameters in the config file
+        river_map_config.optional['output_prefix'] = f'Group_{my_group_id}_{rank}_{i}_'
+        river_map_config.optional['mpi_print_prefix'] = f'[Rank {rank}, Group {i+1} of {len(my_tile_groups)}, global: {my_group_id}] '
+        river_map_config.optional['selected_thalweg'] = my_tile_group_thalwegs
+        make_river_map(
+            tif_fnames = my_tile_group,
+            thalweg_shp_fname = thalweg_shp_fname,
+            output_dir = output_dir,
+            **river_map_config.optional,  # pass all optional parameters with a dictionary
+        )
 
         print(f'Rank {rank}: Group {i+1} (global: {my_group_id}) run time: {time.time()-time_this_group_start} seconds.')
 

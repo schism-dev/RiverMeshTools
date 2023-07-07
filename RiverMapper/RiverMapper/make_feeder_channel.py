@@ -9,7 +9,7 @@ class Feeder():
         self.points_x, self.points_y = points_x, points_y
         self.head = np.c_[np.mean(points_x[:, 0]), np.mean(points_y[:, 0])]
 
-        base_id = min(self.points_x.shape[1]-1, base_id)
+        base_id = min(self.points_x.shape[1]-1, base_id)  # used to be without "-1", needs to be checked
         self.base = np.c_[np.mean(points_x[:, base_id]), np.mean(points_y[:, base_id])]
 
 def find_inlets_outlets2(line_map:SMS_MAP, boundary_shp:str):
@@ -184,7 +184,7 @@ if __name__ == "__main__":
                     xt[:, k] = feeder_base_pts[:, 0] + feeder_channel_length[k] * np.cos(perp)
                     yt[:, k] = feeder_base_pts[:, 1] + feeder_channel_length[k] * np.sin(perp)
 
-                point_array =  np.c_[xt[:, i_inlet_option:len(feeder_channel_extension)].reshape(-1, 1),
+                point_array =  np.c_[xt[:, i_inlet_option:len(feeder_channel_extension)].reshape(-1, 1),  # used to be i_inlet_option+1, needs to be checked
                                      yt[:, i_inlet_option:len(feeder_channel_extension)].reshape(-1, 1)]
                 if len(point_array) == 0:
                     break

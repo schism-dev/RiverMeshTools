@@ -206,7 +206,12 @@ def find_thalweg_tile(
         if cache_folder is None:
             cache_folder = os.path.dirname(os.path.abspath(dem_dict[k]['glob_pattern']))  # same as *.shp's folder
 
-        dem_dict[k]['file_list'] = glob(dem_dict[k]['glob_pattern'])
+        # if glob pattern returns any files, put them into the file_list
+        dem_dict[k]['file_list'].extend(glob(dem_dict[k]['glob_pattern']))
+        # get unique file names
+        dem_dict[k]['file_list'] = list(set(dem_dict[k]['file_list']))
+
+        # get box of each tile
         dem_dict[k]['boxes'] = [get_tif_box(x) for x in dem_dict[k]['file_list']]
 
     # read thalwegs
