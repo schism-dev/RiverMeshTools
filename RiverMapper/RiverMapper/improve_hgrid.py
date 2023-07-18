@@ -351,6 +351,8 @@ def quality_check_hgrid(gd, outdir='./', small_ele_limit=5.0, skew_ele_minangle=
     gd.compute_ctr()
     gd.compute_nne()
 
+    # negative area
+    print(f'\n{sum(gd.area<0)} negative area elements.')
     # small and skew elements
     sorted_idx = np.argsort(gd.area)
     # small elements
@@ -396,19 +398,15 @@ def quality_check_hgrid(gd, outdir='./', small_ele_limit=5.0, skew_ele_minangle=
         'small_ele': small_ele, 'skew_ele': skew_ele
     }
 
-def improve_hgrid(hgrid_name='', prj='esri:102008', load_bathy=False, nmax=3):
+def improve_hgrid(gd, prj='esri:102008', load_bathy=False, nmax=3):
     '''
     Fix small and skew elements and bad quads
     prj: needs to specify hgrid's projection (the unit must be in meters)
     nmax: maximum number of rounds of fixing, most fixable elements can be fixed with nmax=4,
           nmax>4 ususally doesn't make additional improvements
     '''
-    prj_name = prj.replace(':', '_')
-
-    gd, dir_info = read_schism_hgrid_cached(hgrid_name, return_source_dir=True)
-    dirname = dir_info['dir']
-    file_basename = dir_info['basename']
-    file_extension = dir_info['extension']
+    dirname = os.path.dirname(gd.source_file)
+    file_basename = os.path.basename(gd.source_file)
 
     # Fix invalid elements
     n_fix = 0
@@ -532,4 +530,7 @@ if __name__ == "__main__":
     # gd.save('/sciclone/schism10/feiye/STOFS3D-v6/Inputs/V6_mesh_from_JZ2/hgrid.ll', fmt=1)
 
     # Sample usage
-    improve_hgrid('/sciclone/schism10/Hgrid_projects/STOFS3D-V6/v15.3/Improve_hgrid/final.gr3')
+    gd = read_schism_hgrid_cached('/sciclone/schism10/Hgrid_projects/OCSMesh/mesh.2dm')
+    # gd.proj(prj0='epsg:4326', prj1='esri:102008')
+    improve_hgrid(gd)
+

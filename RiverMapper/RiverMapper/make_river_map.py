@@ -1214,11 +1214,9 @@ def make_river_map(
     river_threshold = np.array(river_threshold) / MapUnit2METER
 
     if i_pseudo_channel == 1:
-        inner_arc_type = "fake"
         require_dem = False
         endpoints_scale = 1.0
     else:
-        inner_arc_type = "regular"
         require_dem = True
         endpoints_scale = 1.3
 
@@ -1361,7 +1359,7 @@ def make_river_map(
     redistributed_thalwegs_after_correction = [None] * len(thalwegs)
     corrected_thalwegs = [None] * len(thalwegs)
     centerlines = [None] * len(thalwegs)
-    thalwegs_cc_reso = [None] * len(thalwegs)
+    # thalwegs_cc_reso = [None] * len(thalwegs)
     final_thalwegs = [None] * len(thalwegs)
     real_bank_width = np.zeros((len(thalwegs), 2), dtype=float)  # [, 0] is head, [, 1] is tail
     bombed_points = np.empty((0, 3), dtype=float)  # left bank and right bank for each thalweg
@@ -1376,11 +1374,13 @@ def make_river_map(
             print(f"{mpi_print_prefix} Thalweg {i} marked as invalid in dry run, skipping ...")
             continue
 
-        # Redistribute thalwegs vertices
+        # set number of cross-channel elements
         if i_pseudo_channel == 1:
             this_nrow_arcs = nrow_pseudo_channel
         else:
             this_nrow_arcs = min(max_nrow_arcs, width2narcs(np.mean(width), min_arcs=min_arcs))
+
+        # Redistribute thalwegs vertices
         thalweg, thalweg_smooth, reso, retained_idx = redistribute_arc(thalweg, thalweg_smooth, width, this_nrow_arcs, length_width_ratio=length_width_ratio, smooth_option=1, endpoints_scale=endpoints_scale, idryrun=True)
         smoothed_thalwegs[i] = SMS_ARC(points=np.c_[thalweg_smooth[:, 0], thalweg_smooth[:, 1]], src_prj='cpp')
         redistributed_thalwegs_pre_correction[i] = SMS_ARC(points=np.c_[thalweg[:, 0], thalweg[:, 1]], src_prj='cpp')
@@ -1389,11 +1389,15 @@ def make_river_map(
             print(f"{mpi_print_prefix} warning: thalweg {i+1} only has one point after redistribution, neglecting ...")
             continue
 
+        # Find bank arcs and inner arcs
         if i_pseudo_channel == 1:
+            quality_controlled = True  # always true for pseudo channel
             x_banks_left, y_banks_left, x_banks_right, y_banks_right, _, width = \
                 get_fake_banks(thalweg, const_bank_width=pseudo_channel_width)
-            arc_position = set_inner_arc_position(nrow_arcs=nrow_pseudo_channel, type=inner_arc_type)
+            arc_position = set_inner_arc_position(nrow_arcs=nrow_pseudo_channel, type='fake')
         else:
+            quality_controlled = False  # need to be tested for real channels
+
             # update thalweg info
             elevs = get_elev_from_tiles(thalweg[:, 0],thalweg[:, 1], S_list)
             thalweg_eta = set_eta_thalweg(thalweg[:, 0], thalweg[:, 1], elevs)
@@ -1427,74 +1431,109 @@ def make_river_map(
             x_banks_left, y_banks_left, x_banks_right, y_banks_right, perp, width = \
                 get_two_banks(S_list, thalweg, thalweg_eta, search_length, search_steps, min_width=river_threshold[0])
 
-            # touch-ups on the two banks
-            if x_banks_left is None or x_banks_right is None:
-                print(f'{mpi_print_prefix} warning: cannot find banks for thalweg {i+1} after redistribution, neglecting ... ')
-                continue
-
-            # nudge banks
-            x_banks_left, y_banks_left = nudge_bank(thalweg, perp+np.pi, x_banks_left, y_banks_left, dist=nudge_ratio*0.5*np.mean(width))
-            x_banks_right, y_banks_right = nudge_bank(thalweg, perp, x_banks_right, y_banks_right, dist=nudge_ratio*0.5*np.mean(width))
-
-            # smooth banks
-            if i_smooth_banks:
-                thalweg, x_banks_left, y_banks_left, x_banks_right, y_banks_right, perp = smooth_bank(thalweg, x_banks_left, y_banks_left, x_banks_right, y_banks_right)
-                if thalweg is None:
+            # final touch-ups
+            if x_banks_left is None or x_banks_right is None:  # degenerate case, no further touch-ups needed
+                print(f'{mpi_print_prefix} warning: cannot find banks for thalweg {i+1} after redistribution')
+                if i_pseudo_channel == 0:
+                    print(f'{mpi_print_prefix} warning: neglecting the thalweg ...')
                     continue
-                thalweg, x_banks_right, y_banks_right, x_banks_left, y_banks_left, perp = smooth_bank(thalweg, x_banks_right, y_banks_right, x_banks_left, y_banks_left)
-                if thalweg is None:
-                    continue
+                elif i_pseudo_channel == 2:
+                    print(f'{mpi_print_prefix} warning: implementing a pseudo channel of width {pseudo_channel_width} ...')
+                    quality_controlled = True  # always true for pseudo channel
+                    x_banks_left, y_banks_left, x_banks_right, y_banks_right, _, width = \
+                        get_fake_banks(thalweg, const_bank_width=pseudo_channel_width)
+                    this_nrow_arcs = nrow_pseudo_channel
+                    arc_position = set_inner_arc_position(nrow_arcs=nrow_pseudo_channel, type='fake')
+            else:  # normal case: touch-ups on the two banks
+                # nudge banks
+                x_banks_left, y_banks_left = nudge_bank(thalweg, perp+np.pi, x_banks_left, y_banks_left, dist=nudge_ratio*0.5*np.mean(width))
+                x_banks_right, y_banks_right = nudge_bank(thalweg, perp, x_banks_right, y_banks_right, dist=nudge_ratio*0.5*np.mean(width))
 
-            # update width
-            width = ((x_banks_left-x_banks_right)**2 + (y_banks_left-y_banks_right)**2)**0.5
+                # smooth banks
+                if i_smooth_banks:
+                    thalweg, x_banks_left, y_banks_left, x_banks_right, y_banks_right, perp = smooth_bank(thalweg, x_banks_left, y_banks_left, x_banks_right, y_banks_right)
+                    if thalweg is None:
+                        continue
+                    thalweg, x_banks_right, y_banks_right, x_banks_left, y_banks_left, perp = smooth_bank(thalweg, x_banks_right, y_banks_right, x_banks_left, y_banks_left)
+                    if thalweg is None:
+                        continue
 
-            # get actual resolution along redistributed/smoothed thalweg
-            # thalweg_resolutions[i] = np.c_[(thalweg[:-1, :]+thalweg[1:, :])/2, get_dist_increment(thalweg)]
+                # update width
+                width = ((x_banks_left-x_banks_right)**2 + (y_banks_left-y_banks_right)**2)**0.5
 
-            # make inner arcs between two banks
-            this_nrow_arcs = min(max_nrow_arcs, width2narcs(np.mean(width), min_arcs=min_arcs))
-            thalwegs_cc_reso[i] = np.c_[thalweg, width / (this_nrow_arcs-1)]  # record cross-channel (cc) resolution at each thalweg point
-            arc_position = set_inner_arc_position(nrow_arcs=this_nrow_arcs, type=inner_arc_type)
+                # get actual resolution along redistributed/smoothed thalweg
+                # thalweg_resolutions[i] = np.c_[(thalweg[:-1, :]+thalweg[1:, :])/2, get_dist_increment(thalweg)]
+
+                # make inner arcs between two banks
+                this_nrow_arcs = min(max_nrow_arcs, width2narcs(np.mean(width), min_arcs=min_arcs))
+                arc_position = set_inner_arc_position(nrow_arcs=this_nrow_arcs, type='regular')
+            # end if degenerate case
         # end if fake arcs
 
-        arc_position = np.r_[-outer_arcs_positions, arc_position, 1.0+outer_arcs_positions].reshape(-1, 1)
-        x_river_arcs = x_banks_left.reshape(1, -1) + np.matmul(arc_position, (x_banks_right-x_banks_left).reshape(1, -1))
-        y_river_arcs = y_banks_left.reshape(1, -1) + np.matmul(arc_position, (y_banks_right-y_banks_left).reshape(1, -1))
+        while True:  # quality control loop, exit when quality is good or fallback to pseudo channel
+                     # regardless of quality, the first half of the loop is always executed to assemble everything
+                     # A loop is used here to avoid code duplication because everything needs to be re-assembled when
+                     # quality check fails and pseudo channel is implemented as a fallback
 
-        z_centerline = width/(this_nrow_arcs-1)
+            # ------------------------- assemble river arcs ---------------------------
+            arc_position = np.r_[-outer_arcs_positions, arc_position, 1.0+outer_arcs_positions].reshape(-1, 1)
+            x_river_arcs = x_banks_left.reshape(1, -1) + np.matmul(arc_position, (x_banks_right-x_banks_left).reshape(1, -1))
+            y_river_arcs = y_banks_left.reshape(1, -1) + np.matmul(arc_position, (y_banks_right-y_banks_left).reshape(1, -1))
 
-        # determine blast radius based on mean channel width at an intersection
-        valid_points = np.ones(x_banks_left.shape, dtype=bool)
-        for k in [0, -1]:  # head and tail
-            dist = thalweg_endpoints[:, :] - thalweg[k, :]
-            # keep the index of self to facilitate the calculation of the blast_radius, which is based on the widths of all intersecting rivers
-            thalwegs_neighbors[i, k] = np.argwhere(dist[:, 0]**2 + dist[:, 1]**2 < 200**2)
-            if len(thalwegs_neighbors[i, k]) > 1:  # at least two rivers, i.e., at least one neighbor (except self)
-                blast_radius[i, k] = blast_radius_scale * np.mean(thalweg_endpoints_width[thalwegs_neighbors[i, k]])
-                blast_center[i, k] = (x_banks_left[k]+x_banks_right[k])/2 + 1j*(y_banks_left[k]+y_banks_right[k])/2
+            z_centerline = width/(this_nrow_arcs-1)  # record cross-channel (cc) resolution at each thalweg point
 
-        # bomb intersections
-        valid_l, valid_l_headtail = bomb_line(np.c_[x_banks_left, y_banks_left], blast_radius[i, :])
-        valid_r, valid_r_headtail = bomb_line(np.c_[x_banks_right, y_banks_right], blast_radius[i, :])
-        valid_points = valid_l * valid_r
-        valid_points_headtail = valid_l_headtail * valid_r_headtail
+            # determine blast radius based on mean channel width at an intersection
+            valid_points = np.ones(x_banks_left.shape, dtype=bool)
+            for k in [0, -1]:  # head and tail
+                dist = thalweg_endpoints[:, :] - thalweg[k, :]
+                # keep the index of self to facilitate the calculation of the blast_radius, which is based on the widths of all intersecting rivers
+                thalwegs_neighbors[i, k] = np.argwhere(dist[:, 0]**2 + dist[:, 1]**2 < 200**2)
+                if len(thalwegs_neighbors[i, k]) > 1:  # at least two rivers, i.e., at least one neighbor (except self)
+                    blast_radius[i, k] = blast_radius_scale * np.mean(thalweg_endpoints_width[thalwegs_neighbors[i, k]])
+                    blast_center[i, k] = (x_banks_left[k]+x_banks_right[k])/2 + 1j*(y_banks_left[k]+y_banks_right[k])/2
 
-        bombed_idx = ~valid_points
-        if not i_blast_intersection:
-            valid_points[:] = True
+            # bomb intersections
+            valid_l, valid_l_headtail = bomb_line(np.c_[x_banks_left, y_banks_left], blast_radius[i, :])
+            valid_r, valid_r_headtail = bomb_line(np.c_[x_banks_right, y_banks_right], blast_radius[i, :])
+            valid_points = valid_l * valid_r
+            valid_points_headtail = valid_l_headtail * valid_r_headtail
 
-        # assemble banks
-        for k, line in enumerate([np.c_[x_banks_left, y_banks_left], np.c_[x_banks_right, y_banks_right]]):
-            bank_arcs_raw[i, k] = SMS_ARC(points=np.c_[line[:, 0], line[:, 1]], src_prj='cpp')
+            bombed_idx = ~valid_points
+            if not i_blast_intersection:
+                valid_points[:] = True
+
+            # assemble banks
+            for k, line in enumerate([np.c_[x_banks_left, y_banks_left], np.c_[x_banks_right, y_banks_right]]):
+                bank_arcs_raw[i, k] = SMS_ARC(points=np.c_[line[:, 0], line[:, 1]], src_prj='cpp')
+                if sum(valid_points) > 0:
+                    bank_arcs[i, k] = SMS_ARC(points=np.c_[line[valid_points, 0], line[valid_points, 1]], src_prj='cpp')
+
             if sum(valid_points) > 0:
-                bank_arcs[i, k] = SMS_ARC(points=np.c_[line[valid_points, 0], line[valid_points, 1]], src_prj='cpp')
+                for j in [0, -1]:
+                    real_bank_width[i, j] = ((x_banks_left[valid_points][j]-x_banks_right[valid_points][j])**2 + (y_banks_left[valid_points][j]-y_banks_right[valid_points][j])**2)**0.5
+            # ------------------------- end: assemble river arcs ---------------------------
 
-        if sum(valid_points) > 0:
-            for j in [0, -1]:
-                real_bank_width[i, j] = ((x_banks_left[valid_points][j]-x_banks_right[valid_points][j])**2 + (y_banks_left[valid_points][j]-y_banks_right[valid_points][j])**2)**0.5
+            if quality_controlled:  # some are pre-qualified because they are pseudo channels
+                break
 
-        # quality check river arcs
-        if river_quality(x_river_arcs, y_river_arcs, valid_points):
+            # quality check
+            if river_quality(x_river_arcs, y_river_arcs, valid_points):  # quality check passed
+                quality_controlled = True
+                break
+            elif i_pseudo_channel == 2:  # quality check failed, fall back to pseudo channel
+                print(f'{mpi_print_prefix} warning: thalweg {i+1} failed quality check, falling back to pseudo channel ...')
+                x_banks_left, y_banks_left, x_banks_right, y_banks_right, _, width = \
+                    get_fake_banks(thalweg, const_bank_width=pseudo_channel_width)
+                this_nrow_arcs = nrow_pseudo_channel
+                arc_position = set_inner_arc_position(nrow_arcs=nrow_pseudo_channel, type='fake')
+                quality_controlled = True
+                # still need to run part of the loop to assemble everything, so don't break here
+            else:
+                print(f'{mpi_print_prefix} warning: thalweg {i+1} failed quality check, skipping ...')
+                quality_controlled = False
+                break
+
+        if quality_controlled:
             # save centerlines
             # assemble inner arcs
             bombs_xyz = [np.empty((0,3), dtype=float)] * 2
@@ -1541,7 +1580,7 @@ def make_river_map(
                         np.tile(z_centerline[valid_points][j], arc_position.size)
                     ], src_prj='cpp')
 
-    # end enumerating each thalweg
+    # end loop i, enumerating each thalweg
 
     # -----------------------------------diagnostic outputs ----------------------------
     if i_DiagnosticOutput:
