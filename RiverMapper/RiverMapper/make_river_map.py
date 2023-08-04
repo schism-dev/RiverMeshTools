@@ -129,8 +129,17 @@ class Config_make_river_map():
     @classmethod
     def BarrierIsland(cls):
         '''
-        Barrier islands can be thought of as a special case of channels,
+        Barrier islands can be treated as a special case of channels
         if the z values of the DEM are inverted.
+        Explanation on the changes from the default settings:
+        1. river_threshold: the default value is (5, 400), which is too small for barrier islands.
+        2. elev_scale: the default value is 1.0; a value of -1.0 is used here to invert the DEM.
+        3. i_real_clean: the default value is False; a value of True is used here to further clean the river map.
+        4. R_coef: the default value is 0.4; a larger value is needed here to make the barrier map more smooth,
+              because capturing the curvature of barrier islands is not as important as the capturing barrier height.
+        5. length_width_ratio: the default value is 6.0; a larger value is used here to make the barrier map more smooth.
+        6. along_channel_reso_thres: the default value is (5, 300); a larger value is used here to fit a nicer 
+              transition between the barrier and the ocean (which often have a resolution of 2000 m).
         '''
         return cls(river_threshold=(5, 6000), elev_scale=-1.0, i_real_clean=True,
                    R_coef=20, length_width_ratio=100, along_channel_reso_thres=(5, 2000))
