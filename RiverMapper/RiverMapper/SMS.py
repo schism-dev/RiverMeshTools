@@ -476,106 +476,41 @@ class Levee_SMS_MAP(SMS_MAP):
 def get_all_points_from_shp(fname, iNoPrint=True, iCache=False, cache_folder=None):
     if not iNoPrint: print(f'reading shapefile: {fname}')
 
-    # if cache_folder is None:
-    #     cache_folder = ''
-
-    # cache_name = cache_folder + Path(fname).stem + '.pkl'
-
-    # if iCache == False:
-    #     if os.path.exists(cache_name):
-    #         os.remove(cache_name)
-
-    if False:  # os.path.exists(cache_name):
-        with open(cache_name, 'rb') as file:
-            tmp_dict = pickle.load(file)
-            xyz = tmp_dict['xyz']
-            shape_pts_l2g = tmp_dict['shape_pts_l2g']
-            curv = tmp_dict['curv']
-            perp = tmp_dict['perp']
-        if not iNoPrint: print(f'Cache of the shapefile loaded.')
-    else:
-        '''using pyshp
-        sf = shapefile.Reader(fname)
-        shapes = sf.shapes()
-
-        shape_pts_l2g = []
-        xyz = np.empty((0, 2), dtype=float)
-        curv = np.empty((0, ), dtype=float)
-        n = 0
-        for i, shp in enumerate(shapes):
-            pts = np.array(shp.points)
-            curv = np.r_[curv, curvature(pts)]
-            # pts_cplx = np.array(pts).view(np.complex128)
-            # dl = abs(pts_cplx[2:-1] - pts_cplx[1:-2])
-
-            # if not iNoPrint: print(f'shp {i+1} of {len(shapes)}, {len(pts)} points')
-
-            xyz = np.append(xyz, shp.points, axis=0)
-            shape_pts_l2g.append(np.array(np.arange(n, n+len(shp.points))))
-            n += len(shp.points)
-        '''
-
         # using geopandas, which seems more efficient than pyshp
-        shapefile = gpd.read_file(fname)
-        npts = 0
-        nvalid_shps = 0
-        for i in range(shapefile.shape[0]):
-            try:
-                shp_points = np.array(shapefile.iloc[i, :]['geometry'].coords.xy).shape[1]
-            except:
-                print(f"warning: shape {i+1} of {shapefile.shape[0]} is invalid")
-                continue
-            npts += shp_points
-            nvalid_shps += 1
+    shapefile = gpd.read_file(fname)
+    npts = 0
+    nvalid_shps = 0
+    for i in range(shapefile.shape[0]):
+        try:
+            shp_points = np.array(shapefile.iloc[i, :]['geometry'].coords.xy).shape[1]
+        except:
+            print(f"warning: shape {i+1} of {shapefile.shape[0]} is invalid")
+            continue
+        npts += shp_points
+        nvalid_shps += 1
 
-        xyz = np.zeros((npts, 2), dtype=float)
-        shape_pts_l2g =[None] * nvalid_shps
-        ptr = 0; ptr_shp = 0
-        for i in range(shapefile.shape[0]):
-            try:
-                shp_points = np.array(shapefile.iloc[i, :]['geometry'].coords.xy).shape[1]
-            except:
-                print(f"warning: shape {i+1} of {shapefile.shape[0]} is invalid")
-                continue
+    xyz = np.zeros((npts, 2), dtype=float)
+    shape_pts_l2g =[None] * nvalid_shps
+    ptr = 0; ptr_shp = 0
+    for i in range(shapefile.shape[0]):
+        try:
+            shp_points = np.array(shapefile.iloc[i, :]['geometry'].coords.xy).shape[1]
+        except:
+            print(f"warning: shape {i+1} of {shapefile.shape[0]} is invalid")
+            continue
 
-            xyz[ptr:ptr+shp_points] = np.array(shapefile.iloc[i, :]['geometry'].coords.xy).T
-            shape_pts_l2g[ptr_shp] = np.array(np.arange(ptr, ptr+shp_points))
-            ptr += shp_points; ptr_shp += 1;
-        if ptr != npts or ptr_shp != nvalid_shps:
-            raise Exception("number of shapes/points does not match")
+        xyz[ptr:ptr+shp_points] = np.array(shapefile.iloc[i, :]['geometry'].coords.xy).T
+        shape_pts_l2g[ptr_shp] = np.array(np.arange(ptr, ptr+shp_points))
+        ptr += shp_points; ptr_shp += 1;
+    if ptr != npts or ptr_shp != nvalid_shps:
+        raise Exception("number of shapes/points does not match")
 
-        curv = np.empty((npts, ), dtype=float)
-        perp = np.empty((npts, ), dtype=float)
-        for i, _ in enumerate(shape_pts_l2g):
-            line = xyz[shape_pts_l2g[i], :]
-            curv[shape_pts_l2g[i]] = curvature(line)
-            perp[shape_pts_l2g[i]] = get_perpendicular_angle(line)
-
-        # for i in range(shapefile.shape[0]):
-        #     try:
-        #         shp_points = np.array(shapefile.iloc[i, :]['geometry'].coords.xy).shape[1]
-        #     except NotImplementedError:
-        #         print(f"Warning: multi-part geometries, neglecting ...")
-        #         continue
-        #     except:
-        #         raiseExceptions(f'Undefined error reading shapefile {fname}')
-
-        #     shape_pts_l2g.append(np.array(np.arange(npts, npts+shp_points)))
-        #     npts += shp_points
-        # xyz = np.empty((npts, 2), dtype=float)
-
-        # curv = np.empty((npts, ), dtype=float)
-        # perp = np.empty((npts, ), dtype=float)
-        # for i in range(shapefile.shape[0]):
-        #     xyz[shape_pts_l2g[i], :] = np.array(shapefile.iloc[i, :]['geometry'].coords.xy).T
-        #     curv[shape_pts_l2g[i]] = curvature(xyz[shape_pts_l2g[i], :])
-        #     perp[shape_pts_l2g[i]] = get_perpendicular_angle(xyz[shape_pts_l2g[i], :2])
-
-        # if not iNoPrint: print(f'Number of shapes read: {len(shapes)}')
-
-        # with open(cache_name, 'wb') as file:
-        #     tmp_dict = {'xyz': xyz, 'shape_pts_l2g': shape_pts_l2g, 'curv': curv, 'perp': perp}
-        #     pickle.dump(tmp_dict, file)
+    curv = np.empty((npts, ), dtype=float)
+    perp = np.empty((npts, ), dtype=float)
+    for i, _ in enumerate(shape_pts_l2g):
+        line = xyz[shape_pts_l2g[i], :]
+        curv[shape_pts_l2g[i]] = curvature(line)
+        perp[shape_pts_l2g[i]] = get_perpendicular_angle(line)
 
     return xyz, shape_pts_l2g, curv, perp
 
@@ -633,5 +568,5 @@ if __name__ == '__main__':
 
     # merge_maps(f'/sciclone/schism10/feiye/STOFS3D-v5/Inputs/v14/Parallel/Outputs/CUDEM_merged_thalwegs_1e6_single_fix_simple_sms_cleaned_32cores/*corrected_thalweg*.map', merged_fname=f'/sciclone/schism10/feiye/STOFS3D-v5/Inputs/v14/Parallel/Outputs/CUDEM_merged_thalwegs_1e6_single_fix_simple_sms_cleaned_32cores/total_corrected_thalwegs.map')
 
-    extract_quad_polygons(input_fname='/sciclone/schism10/Hgrid_projects/STOFS3D-V6/v16.2/coastal_v15.4.map')
+    extract_quad_polygons(input_fname='/sciclone/schism10/Hgrid_projects/STOFS3D-V6/v17_subset/new8/coastal.map')
     pass

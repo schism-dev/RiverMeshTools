@@ -59,32 +59,32 @@
 
 !     Bnd
       isbnd=0
-      read(14,*) nope
-      read(14,*) neta
-      ntot=0
-      do k=1,nope
-        read(14,*) nond
-        do i=1,nond
-          read(14,*) nd !iond(k,i)
-          isbnd(nd)=k
-        enddo !i
-      enddo !k
+      ! read(14,*) nope
+      ! read(14,*) neta
+      ! ntot=0
+      ! do k=1,nope
+      !   read(14,*) nond
+      !   do i=1,nond
+      !     read(14,*) nd !iond(k,i)
+      !     isbnd(nd)=k
+      !   enddo !i
+      ! enddo !k
 
 !     Land bnds
-      read(14,*) nland
-      read(14,*) nvel !total #
-      do k=1,nland
-        read(14,*)nlnd
-        do i=1,nlnd
-          read(14,*)ilnd
-          if(isbnd(ilnd)==0) isbnd(ilnd)=-1
-        enddo !i
-      enddo !k
-      close(14)
+      ! read(14,*) nland
+      ! read(14,*) nvel !total #
+      ! do k=1,nland
+      !   read(14,*)nlnd
+      !   do i=1,nlnd
+      !     read(14,*)ilnd
+      !     if(isbnd(ilnd)==0) isbnd(ilnd)=-1
+      !   enddo !i
+      ! enddo !k
+      ! close(14)
 
-      do i=1,np
-        if(isbnd(i)/=0) ifixed(i)=1
-      enddo !i
+      ! do i=1,np
+      !   if(isbnd(i)/=0) ifixed(i)=1
+      ! enddo !i
 
 !     Neighborhood
       nne=0

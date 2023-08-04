@@ -52,6 +52,8 @@ def merge_outputs(output_dir):
 
     total_river_map = merge_maps(f'{output_dir}/*river_arcs.map', merged_fname=f'{output_dir}/total_river_arcs.map')
 
+    total_dummy_map = merge_maps(f'{output_dir}/*dummy_arcs.map', merged_fname=f'{output_dir}/total_dummy_arcs.map')
+
     total_river_arcs = None
     if total_river_map is not None:
         total_river_arcs = total_river_map.arcs
@@ -72,7 +74,7 @@ def merge_outputs(output_dir):
         gpd.pd.concat([gpd.read_file(x).to_crs('epsg:4326') for x in bomb_polygon_files]).to_file(f'{output_dir}/total_bomb_polygons.shp')
 
     print(f'Merging outputs took: {time.time()-time_merge_start} seconds.')
-    return [total_arcs_map, total_intersection_joints, total_river_arcs, total_centerlines]
+    return [total_arcs_map, total_intersection_joints, total_river_arcs, total_centerlines, total_dummy_map]
 
 
 def final_clean_up(output_dir, total_arcs_map, snap_points, i_blast_intersection=False, total_river_arcs=None):
@@ -164,6 +166,9 @@ def river_map_mpi_driver(
                 with open(cache_name, 'wb') as file:
                     pickle.dump([thalwegs2tile_groups, tile_groups_files, tile_groups2thalwegs], file)
 
+    if np.all(np.equal(tile_groups_files, None)):
+        raise ValueError(f'No DEM tiles found for the thalwegs in {thalweg_shp_fname}')
+
     thalwegs2tile_groups = comm.bcast(thalwegs2tile_groups, root=0)
     tile_groups_files = comm.bcast(tile_groups_files, root=0)
     tile_groups2thalwegs = comm.bcast(tile_groups2thalwegs, root=0)
@@ -238,14 +243,17 @@ def river_map_mpi_driver(
     # finalize
     if rank == 0:
         # merge outputs from all ranks
-        total_arcs_map, total_intersection_joints, total_river_arcs, total_centerlines = merge_outputs(output_dir)
+        total_arcs_map, total_intersection_joints, total_river_arcs, total_centerlines, total_dummy_map = merge_outputs(output_dir)
 
         print(f'\n--------------- final clean-ups --------------------------------------------------------\n')
         time_final_cleanup_start = time.time()
 
         total_arcs_cleaned = [arc for arc in total_arcs_map.to_GeoDataFrame().geometry.unary_union.geoms]
         if not river_map_config.optional['i_blast_intersection']:
-            bomb_polygons = gpd.read_file(f'{output_dir}/total_bomb_polygons.shp')
+            if os.path.exists(f'{output_dir}/total_bomb_polygons.shp'):
+                bomb_polygons = gpd.read_file(f'{output_dir}/total_bomb_polygons.shp')
+            else:
+                bomb_polygons = None
             total_arcs_cleaned = clean_intersections(
                 arcs=total_arcs_cleaned, target_polygons=bomb_polygons, snap_points=total_intersection_joints,
                 i_OCSMesh=river_map_config.optional['i_OCSMesh'],
@@ -256,6 +264,12 @@ def river_map_mpi_driver(
             snap_point_reso_ratio=river_map_config.optional['snap_point_reso_ratio'],
             snap_arc_reso_ratio=river_map_config.optional['snap_arc_reso_ratio'],
         )
+
+        # merge dummy arcs into total_arcs_cleaned
+        if len(total_dummy_map.arcs) > 0:
+            total_arcs_cleaned = total_arcs_cleaned + total_dummy_map.arcs
+            total_arcs_cleaned = [arc for arc in total_arcs_map.to_GeoDataFrame().geometry.unary_union.geoms]
+
         SMS_MAP(arcs=geos2SmsArcList(total_arcs_cleaned)).writer(filename=f'{output_dir}/total_arcs.map')
 
         gpd.GeoDataFrame(

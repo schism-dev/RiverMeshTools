@@ -14,6 +14,8 @@ from glob import glob
 
 
 iDiagnosticOutputs = False
+skewness_threshold = 30
+area_threshold = 5
 
 # Print iterations progress
 def printProgressBar (iteration, total, prefix = '', suffix = '', decimals = 1, length = 100, fill = '█', printEnd = "\r"):
@@ -37,14 +39,10 @@ def printProgressBar (iteration, total, prefix = '', suffix = '', decimals = 1, 
     if iteration == total:
         print()
 
-def spring(gd):
-    return gd
-
 def reduce_bad_elements(
     gd=None, fixed_eles_id=np.array([], dtype=int), fixed_points_id=np.array([], dtype=int),
-    area_threshold=150, skewness_threshold=10, nmax=6, output_fname=None
+    area_threshold=150, skewness_threshold=30, nmax=4, output_fname=None
 ):
-
     n = 0
     while True:
         n += 1
@@ -61,20 +59,18 @@ def reduce_bad_elements(
         gd0 = copy.deepcopy(gd)
 
         # calculate geometries; needs to update for every iteration
+        print('computing geometries')
+        gd.compute_all(fmt=1)
         gd.compute_bnd()
-        print('computing additional geometries')
-        gd.compute_ic3()
-        gd.compute_area()
-        gd.compute_nne()
-        gd.compute_side(fmt=2)
-
 
         # *******************************************
         # Set fixed points and elements, i.e., those that cannot be changed
         # *******************************************
-        # append boundary points to fixed_points fixed points
-        if n > 1:  # clear input fixed points after the first iteration
+        if n == 1:  # clear input fixed points after the first iteration
+            fixed_points_id = np.sort(np.unique(np.array([*fixed_points_id])))
+        else:
             fixed_points_id = np.array([], dtype=int)
+        # append boundary points to fixed_points
         fixed_points_id = np.sort(np.unique(np.array([*fixed_points_id, *gd.bndinfo.ip])))
 
         i_fixed_eles = np.zeros((gd.ne, ), dtype=bool)
@@ -107,14 +103,67 @@ def reduce_bad_elements(
         degenerate_count = np.zeros((gd.np, ), dtype=int)
         degenerate_count[small_elnode_flatten[idx]] = counts
 
-        distj_padded = np.r_[gd.distj, np.nan]
-        element_dl = distj_padded[gd.elside]
-        aspect_ratios =  -np.log(abs(0.5 - np.nanmax(element_dl, axis=1) / (np.nansum(element_dl, axis=1) + 1e-12)))
+        # More stringent than in quality_check_hgrid
+        i_skew = gd.check_skew_elems_xmgredit(skewness_threshold=skewness_threshold*0.8)
+
+        print(f'trying to fix skew elements by edge swapping')
+        i_swapped = np.zeros((gd.ne, ), dtype=bool)
+        for i, ie in enumerate(np.argwhere(i_skew).flatten()):
+
+            if gd.i34[ie] == 4:  # quad
+                continue
+
+            isd = np.argmax(gd.distj[gd.elside[ie, :3]])
+            nei = gd.ic3[ie, isd]
+
+            # save the original element nodes and area
+            area0, area_nei0 = compute_ie_area(gd, [ie, nei])
+            elnode0 = copy.deepcopy(gd.elnode[ie, :3])
+            elnode_nei0 = copy.deepcopy(gd.elnode[nei, :3])
+
+            if i_swapped[ie] or i_swapped[nei]:  # already swapped
+                continue
+
+            if nei < 0 or gd.i34[nei] == 4:  # boundary or quad
+                continue
+            else:
+                isd_nodes = gd.isidenode[gd.elside[ie, isd], :]  # nodes of the longest side
+                non_share_node = elnode0[~np.isin(elnode0, isd_nodes)]
+                non_share_node_nei = elnode_nei0[~np.isin(elnode_nei0, isd_nodes)]
+
+                # re-arrange element nodes, starting from the non-share node
+                idx = np.argwhere(gd.elnode[ie, :] == non_share_node).flatten()
+                gd.elnode[ie, :3] = np.roll(gd.elnode[ie, :3], -idx)
+                # swap the longest side
+                gd.elnode[ie, 1] = non_share_node_nei
+
+                # do the same for the neighbor
+                idx = np.argwhere(gd.elnode[nei, :] == non_share_node_nei).flatten()
+                gd.elnode[nei, :3] = np.roll(gd.elnode[nei, :3], -idx)
+                gd.elnode[nei, 1] = non_share_node
+            
+            # check for improvement
+            area, area_nei = compute_ie_area(gd, [ie, nei])
+            if area < area0 or area_nei < area0:  # revert the swap
+                gd.elnode[ie, :3] = elnode0
+                gd.elnode[nei, :3] = elnode_nei0
+            else:  # swap successful
+                i_swapped[ie] = True
+                i_swapped[nei] = True
+                # print(f'swapped the common edge of elements {ie+1} and {nei+1}')
+
+        print(f'swapped edges for {sum(i_swapped)} skew elements and their neighbors')
+        
+        # recalculate geometries
+        gd.compute_all(fmt=1)
+
+        # recalculate i_skew
+        i_skew = gd.check_skew_elems_xmgredit(skewness_threshold=skewness_threshold*0.8)
 
         if reduce_type == 3:
-            is_target_triangle = is_target_triangle * (aspect_ratios < skewness_threshold) * (~i_fixed_eles)
+            is_target_triangle = is_target_triangle * i_skew * (~i_fixed_eles)
         else:
-            is_target_triangle = is_target_triangle * (aspect_ratios >= skewness_threshold) * (~i_fixed_eles)
+            is_target_triangle = is_target_triangle * i_skew * (~i_fixed_eles)
         target_triangle_id = np.argwhere(is_target_triangle)
 
         # *******************************************
@@ -258,6 +307,25 @@ def reduce_bad_elements(
     return gd
 
 def grid_element_relax(gd, target_points=None, niter=3, ntier=0, max_dist=50, min_area_allowed=1e-3, wdir=None, output_fname=None):
+    '''
+    Relax specified element nodes to improve grid quality.
+    The function prepares inputs for grid_spring, which is a Fortran executable,
+    then calls grid_spring to do the actual work.
+
+    Inputs:
+        gd: schism_grid object
+        target_points: a boolean array of size (gd.np, ) indicating whether a node is a target point
+        niter: number of iterations
+        ntier: number of tiers, i.e., number of layers of neighboring elements to be relaxed
+        max_dist: maximum distance when searching for neighboring elements
+        min_area_allowed: minimum area allowed for an element
+        wdir: working directory of grid_spring (which is a Fortran executable)
+        output_fname: output file name
+    Outputs:
+        gd: updated schism_grid object
+        other diagnostic outputs are written to wdir
+    '''
+
     if not os.path.exists(wdir):
         raise Exception(f'wdir: {wdir} not found')
     else:
@@ -266,7 +334,8 @@ def grid_element_relax(gd, target_points=None, niter=3, ntier=0, max_dist=50, mi
             for file in output_files:
                 os.remove(file)
 
-    # set fixed points (which won't be moved)
+    # set target points, i.e., points that can be moved, as opposed to fixed points
+    # user-specified target points
     if target_points is not None:
         if target_points.dtype == bool:
             pass
@@ -279,19 +348,20 @@ def grid_element_relax(gd, target_points=None, niter=3, ntier=0, max_dist=50, mi
     else:  # all points can be moved if target_points are not specified
         target_points = np.ones((gd.np, ), dtype=bool)
 
-    # fix boundary points too
+    # any interior points are potential target points, i.e., any boundary points are fixed
     interior_points = np.ones((gd.np, ), dtype=bool)
     gd.compute_bnd()
     interior_points[gd.bndinfo.ip] = False
+    
+    # relax points are user-specified target points that are also interior points
+    i_relax = target_points * interior_points
+    relax_points = np.argwhere(i_relax).flatten()
 
     print('preparing inputs')
 
-    # find inp
+    # find ine, i.e., neighboring elements of each node for all nodes
     if not hasattr(gd, 'ine'):
         gd.compute_nne()
-
-    i_relax = target_points * interior_points
-    relax_points = np.argwhere(i_relax).flatten()
 
     # # Lloyd
     #     field = lloyd.Field(np.c_[gd.x[nd_nei], gd.y[nd_nei]])
@@ -314,7 +384,7 @@ def grid_element_relax(gd, target_points=None, niter=3, ntier=0, max_dist=50, mi
     relax_points = np.argwhere(i_relax)
 
     ifixed = (~i_relax).astype(int)
-    gd.write_hgrid(f'{wdir}/fixed.gr3', value=ifixed, fmt=1)
+    gd.write_hgrid(f'{wdir}/fixed.gr3', value=ifixed, fmt=0)
 
     # springing
     script_dir =  os.path.dirname(original_file.__file__)
@@ -339,26 +409,33 @@ def grid_element_relax(gd, target_points=None, niter=3, ntier=0, max_dist=50, mi
 
     return gd
 
-def quality_check_hgrid(gd, outdir='./', small_ele_limit=5.0, skew_ele_minangle=0.5):
+def quality_check_hgrid(gd, outdir='./', area_threshold=area_threshold, skewness_threshold=skewness_threshold):
     '''
-    Check several types of grid issues that may crash the model:
-    Input hgrid needs to have meter unit
+    Check several types of grid issues that may crash the model,
+    including small and skew elements, and negative area elements.
+    The unit of the input hgrid needs to be in meters
+
+    Inputs:
+        gd: schism_grid object
+        outdir: output directory
+        area_threshold: minimum area allowed for an element
+        skewness_threshold: maximum skewness allowed for an element,
+            skewness assumes the definition in xmgredit, i.e.,
+            based on the ratio between the longest edge and the equivalent radius
     '''
 
     print('\n-----------------quality check>')
 
-    gd.compute_area()
-    gd.compute_ctr()
-    gd.compute_nne()
+    gd.compute_all(fmt=1)
 
     # negative area
     print(f'\n{sum(gd.area<0)} negative area elements.')
     # small and skew elements
     sorted_idx = np.argsort(gd.area)
     # small elements
-    i_small_ele = gd.area < small_ele_limit
+    i_small_ele = gd.area < area_threshold
     n_small_ele = sum(i_small_ele)
-    print(f'\n{n_small_ele} small (< {small_ele_limit} m2) elements:')
+    print(f'\n{n_small_ele} small (< {area_threshold} m2) elements:')
     small_ele = np.argwhere(i_small_ele).flatten()
     if n_small_ele > 0:
         print(f'Element id:            area,             xctr,             yctr')
@@ -366,8 +443,11 @@ def quality_check_hgrid(gd, outdir='./', small_ele_limit=5.0, skew_ele_minangle=
             print(f'Element {ie+1}: {gd.area[ie]}, {gd.xctr[ie]}, {gd.yctr[ie]}')
 
     # skew elements
-    skew_ele = gd.check_skew_elems(angle_min=skew_ele_minangle, fmt=1, fname=None)
-    print(f'\n{len(skew_ele)} skew (min angle < {skew_ele_minangle})')
+    # skew_ele = gd.check_skew_elems(angle_min=skewness_threshold, fmt=1, fname=None)
+    # print(f'\n{len(skew_ele)} skew (min angle < {skewness_threshold})')
+    i_skew = gd.check_skew_elems_xmgredit(skewness_threshold=skewness_threshold)
+    skew_ele = np.argwhere(i_skew).flatten()
+    print(f'\n{len(skew_ele)} skew (max skewness >= {skewness_threshold})')
     if len(skew_ele) > 0:
         sorted_idx = np.argsort(gd.area[skew_ele])
         sorted_skew_ele = np.sort(gd.area[skew_ele])
@@ -398,12 +478,14 @@ def quality_check_hgrid(gd, outdir='./', small_ele_limit=5.0, skew_ele_minangle=
         'small_ele': small_ele, 'skew_ele': skew_ele
     }
 
-def improve_hgrid(gd, prj='esri:102008', load_bathy=False, nmax=3):
+def improve_hgrid(gd, prj='esri:102008', load_bathy=False, n_intersection_fix=999, nmax=5):
     '''
     Fix small and skew elements and bad quads
     prj: needs to specify hgrid's projection (the unit must be in meters)
     nmax: maximum number of rounds of fixing, most fixable elements can be fixed with nmax=4,
           nmax>4 ususally doesn't make additional improvements
+    n_intersection_fix: number of rounds of relaxing intersection points
+          default is 999, i.e., relaxing intersection points in every round
     '''
     dirname = os.path.dirname(gd.source_file)
     file_basename = os.path.basename(gd.source_file)
@@ -437,6 +519,7 @@ def improve_hgrid(gd, prj='esri:102008', load_bathy=False, nmax=3):
             # split bad quads
             gd.check_quads(angle_min=50,angle_max=130,fname=bp_name)
             gd.split_quads(angle_min=50, angle_max=130)
+            gd.compute_all(fmt=1)
             # outputs from split quads
             bad_quad_bp = read_schism_bpfile(fname=bp_name)
             print(f'{bad_quad_bp.nsta} bad quads split')
@@ -449,9 +532,9 @@ def improve_hgrid(gd, prj='esri:102008', load_bathy=False, nmax=3):
                 i_target_nodes = quality_check_hgrid(gd, outdir=dirname)['i_invalid_nodes']
                 if i_target_nodes is None: continue
 
-            print('\n ----------------------------- include intersection relax points only at Round 1 >')
-            if n_fix == 1:
-                inter_relax_pts = SMS_MAP(filename=f'{dirname}/intersection_relax.map').detached_nodes
+            print('\n ----------------------------- include intersection relax points ----------------------')
+            if n_fix <= n_intersection_fix:
+                inter_relax_pts = SMS_MAP(filename=f'{dirname}/total_intersection_joints.map').detached_nodes
                 inter_relax_pts_x, inter_relax_pts_y = proj_pts(inter_relax_pts[:, 0], inter_relax_pts[:, 1], prj1='epsg:4326', prj2=prj)
                 inter_relax_nd = find_nearest_nd(gd, np.c_[inter_relax_pts_x, inter_relax_pts_y])
                 i_target_nodes[inter_relax_nd] = True
@@ -461,7 +544,7 @@ def improve_hgrid(gd, prj='esri:102008', load_bathy=False, nmax=3):
             target_nodes_expand, i_target_nodes_expand = propogate_nd(gd, i_target_nodes, ntiers=3)
             gd = reduce_bad_elements(
                 gd=gd, fixed_points_id=np.argwhere(~i_target_nodes_expand).flatten(),
-                area_threshold=35,
+                area_threshold=area_threshold * 10,  # more stringent than in quality_check_hgrid
                 output_fname=f'{dirname}/{file_basename}_fix_bad_eles_round_{n_fix}.2dm'
             )
 
@@ -469,7 +552,7 @@ def improve_hgrid(gd, prj='esri:102008', load_bathy=False, nmax=3):
             i_target_nodes = quality_check_hgrid(gd, outdir=dirname)['i_invalid_nodes']
             if i_target_nodes is None: continue
 
-            if n_fix == 1:
+            if n_fix <= n_intersection_fix:
                 # re-find intersection nodes since gd is updated
                 inter_relax_nd = find_nearest_nd(gd, np.c_[inter_relax_pts_x, inter_relax_pts_y])
                 i_target_nodes[inter_relax_nd] = True
@@ -516,6 +599,8 @@ def improve_hgrid(gd, prj='esri:102008', load_bathy=False, nmax=3):
     pass
 
 if __name__ == "__main__":
+    print(f'Running {__file__} with the {skewness_threshold} skewness threshold and {area_threshold} area threshold')
+
     # # Sample usage
     # gd = read_schism_hgrid_cached('/sciclone/schism10/feiye/STOFS3D-v6/Inputs/I13r_LL/hgrid_xGEOID20b.gr3')
     # gd.proj(prj0='epsg:4326', prj1='esri:102008')
@@ -530,7 +615,9 @@ if __name__ == "__main__":
     # gd.save('/sciclone/schism10/feiye/STOFS3D-v6/Inputs/V6_mesh_from_JZ2/hgrid.ll', fmt=1)
 
     # Sample usage
-    gd = read_schism_hgrid_cached('/sciclone/schism10/Hgrid_projects/OCSMesh/mesh.2dm')
-    # gd.proj(prj0='epsg:4326', prj1='esri:102008')
-    improve_hgrid(gd)
+    gd = read_schism_hgrid_cached('/sciclone/schism10/Hgrid_projects/STOFS3D-V6/v17_subset/new10/new10.2dm')
+    # gd = read_schism_hgrid_cached('/sciclone/schism10/Hgrid_projects/STOFS3D-V6/v17.0/v17.0.2dm')
+    gd.compute_bnd()  # sanity check for illegal boundaries, in case of which this step will hang
+    improve_hgrid(gd, n_intersection_fix=0)
 
+    pass

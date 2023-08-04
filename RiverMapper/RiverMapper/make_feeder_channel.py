@@ -84,10 +84,14 @@ if __name__ == "__main__":
     # output_dir = '/sciclone/schism10/feiye/STOFS3D-v5/Inputs/v14/Parallel/SMS_proj/feeder/'
     # rivermap_fname = f'{output_dir}/total_inner_arcs.map'
     # grid_fname = '/sciclone/schism10/feiye/STOFS3D-v5/Inputs/v14/Parallel/SMS_proj/feeder/hgrid.ll'
-    output_dir = '/sciclone/schism10/Hgrid_projects/STOFS3D-V6/v16.2/Feeder/'
+    # output_dir = '/sciclone/schism10/Hgrid_projects/STOFS3D-V6/v16.2/Feeder/'
+    # rivermap_fname = f'/sciclone/schism10/Hgrid_projects/STOFS3D-V6/v16.2/Feeder/total_river_arcs1.map'
+    # grid_fname = '/sciclone/schism10/Hgrid_projects/STOFS3D-V6/v16.2/Feeder/hgrid.ll'
+    # grid_boundary_shp = '/sciclone/schism10/Hgrid_projects/STOFS3D-V6/v16/Shapefiles/boundary.shp'
+    output_dir = '/sciclone/schism10/Hgrid_projects/STOFS3D-V6/v17_subset/Feeder/'
     rivermap_fname = f'/sciclone/schism10/Hgrid_projects/STOFS3D-V6/v16.2/Feeder/total_river_arcs1.map'
-    grid_fname = '/sciclone/schism10/Hgrid_projects/STOFS3D-V6/v16.2/Feeder/hgrid.ll'
-    grid_boundary_shp = '/sciclone/schism10/Hgrid_projects/STOFS3D-V6/v16/Shapefiles/boundary.shp'
+    grid_fname = '/sciclone/schism10/Hgrid_projects/STOFS3D-V6/v17_subset/Feeder/hgrid.ll'
+    grid_boundary_shp = '/sciclone/schism10/Hgrid_projects/STOFS3D-V6/v17_subset/Shapefiles/boundary.shp'
     # -------------------- end inputs ----------------
 
     timer = time()
