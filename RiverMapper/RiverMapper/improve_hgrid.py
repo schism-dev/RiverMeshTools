@@ -154,7 +154,15 @@ def reduce_bad_elements(
             else:
                 isd_nodes = gd.isidenode[gd.elside[ie, isd], :]  # nodes of the longest side
                 non_share_node = elnode0[~np.isin(elnode0, isd_nodes)]
+                if len(non_share_node) == 1:
+                    non_share_node = non_share_node[0]
+                else:
+                    raise ValueError('non_share_node is not a scalar')
                 non_share_node_nei = elnode_nei0[~np.isin(elnode_nei0, isd_nodes)]
+                if len(non_share_node_nei) == 1:
+                    non_share_node_nei = non_share_node_nei[0]
+                else:
+                    raise ValueError('non_share_node_nei is not a scalar')
 
                 # re-arrange element nodes, starting from the non-share node
                 idx = np.argwhere(gd.elnode[ie, :] == non_share_node).flatten()
@@ -473,7 +481,7 @@ def quality_check_hgrid(gd, outdir='./', area_threshold=None, skewness_threshold
     # skew_ele = gd.check_skew_elems(angle_min=skewness_threshold, fmt=1, fname=None)
     # print(f'\n{len(skew_ele)} skew (min angle < {skewness_threshold})')
     skew_ele = gd.check_skew_elems(threshold=skewness_threshold)
-    print(f'\n{len(skew_ele)} skew (max skewness >= {skewness_threshold})')
+    print(f'\n{len(skew_ele)} skew (skewness >= {skewness_threshold})')
     if len(skew_ele) > 0:
         sorted_idx = np.argsort(gd.area[skew_ele])
         sorted_skew_ele = np.sort(gd.area[skew_ele])
@@ -634,7 +642,7 @@ if __name__ == "__main__":
     grid_file, skewness_threshold, area_threshold = cmd_line_interface()
 
     # or set arguments manually
-    # grid_file = '/sciclone/schism10/Hgrid_projects/STOFS3D-V6/v17_subset/new10/new10.2dm'
+    # grid_file = '/sciclone/schism10/Hgrid_projects/STOFS3D-V6/v17_subset/new10/Test/new10.2dm_fix_bad_eles_round_5.2dm'
     # skewness_threshold = 30
     # area_threshold = 5
 
@@ -643,6 +651,6 @@ if __name__ == "__main__":
     # sanity check for illegal boundaries, in case of which this step will hang
     gd.compute_bnd()
     # improve grid quality
-    improve_hgrid(gd, n_intersection_fix=0, area_threshold=area_threshold, skewness_threshold=skewness_threshold)
+    improve_hgrid(gd, n_intersection_fix=0, area_threshold=area_threshold, skewness_threshold=skewness_threshold, nmax=4)
 
     pass
