@@ -2,7 +2,7 @@
 """
 This script fixes small and skew elements and bad quads in a SCHISM grid.
 
-Usage: 
+Usage:
 Run in command line: python improve_hgrid.py <grid_file> --skewness_threshold <skewness_threshold> --area_threshold <area_threshold>
 the grid file can be in 2dm, gr3, or ll format
 
@@ -29,7 +29,7 @@ iDiagnosticOutputs = False
 
 def cmd_line_interface():
     parser = argparse.ArgumentParser(description="Input a grid file to fix small/skew elements.")
-    
+
     parser.add_argument("grid", type=str, help="Path to the grid file to be fixed")
     parser.add_argument("--skewness_threshold", type=float, default=30.0, help="Maximum skewness allowed for an element, skewness assumes the definition in xmgredit, i.e., based on the ratio between the longest edge and the equivalent radius")
     parser.add_argument("--area_threshold", type=float, default=5.0, help="Minimum area allowed for an element")
@@ -166,7 +166,7 @@ def reduce_bad_elements(
                 idx = np.argwhere(gd.elnode[nei, :] == non_share_node_nei).flatten()
                 gd.elnode[nei, :3] = np.roll(gd.elnode[nei, :3], -idx)
                 gd.elnode[nei, 1] = non_share_node
-            
+
             # check for improvement
             area, area_nei = compute_ie_area(gd, [ie, nei])
             if area < area0 or area_nei < area0:  # revert the swap
@@ -178,7 +178,7 @@ def reduce_bad_elements(
                 # print(f'swapped the common edge of elements {ie+1} and {nei+1}')
 
         print(f'swapped edges for {sum(i_swapped)} skew elements and their neighbors')
-        
+
         # recalculate geometries
         gd.compute_all(fmt=1)
 
@@ -310,13 +310,13 @@ def reduce_bad_elements(
             print(f'found negative elements: {np.argwhere(gd.area<0.0)+1}')
             print(f'reverting to previous grid ...')
             if iDiagnosticOutputs:
-                grd2sms(gd, f'{os.path.dirname(output_fname)}/{pathlib.Path(output_fname).stem}.fix{n}.failed.2dm')
-                grd2sms(gd0, f'{os.path.dirname(output_fname)}/{pathlib.Path(output_fname).stem}.fix{n}.pre-failed.2dm')
+                grd2sms(gd, f'{pathlib.Path(output_fname).parent}/{pathlib.Path(output_fname).stem}.fix{n}.failed.2dm')
+                grd2sms(gd0, f'{pathlib.Path(output_fname).parent}/{pathlib.Path(output_fname).stem}.fix{n}.pre-failed.2dm')
                 print(f'final element areas: {np.sort(gd.area)}')
             gd = copy.deepcopy(gd0)
         else:
             if iDiagnosticOutputs:
-                grd2sms(gd, f'{os.path.dirname(output_fname)}/{pathlib.Path(output_fname).stem}.fix{n}.2dm')
+                grd2sms(gd, f'{pathlib.Path(output_fname).parent}/{pathlib.Path(output_fname).stem}.fix{n}.2dm')
             gd = hgrid_basic(gd)
             pass
 
@@ -379,7 +379,7 @@ def grid_element_relax(gd, target_points=None, niter=3, ntier=0, max_dist=50, mi
     interior_points = np.ones((gd.np, ), dtype=bool)
     gd.compute_bnd()
     interior_points[gd.bndinfo.ip] = False
-    
+
     # relax points are user-specified target points that are also interior points
     i_relax = target_points * interior_points
     relax_points = np.argwhere(i_relax).flatten()
@@ -514,7 +514,7 @@ def improve_hgrid(gd, prj='esri:102008', skewness_threshold=30, area_threshold=5
           default is 0, i.e., not relaxing intersection points
           set a large number (e.g., 999) to relax intersection points in every round
     '''
-    dirname = os.path.dirname(gd.source_file)
+    dirname = pathlib.Path(gd.source_file).resolve().parent
     file_basename = os.path.basename(gd.source_file)
 
     # Fix invalid elements
@@ -639,9 +639,9 @@ if __name__ == "__main__":
     # area_threshold = 5
 
     # read grid into schism_grid object
-    gd = read_schism_hgrid_cached(grid_file, overwrite_cache=True)
+    gd = read_schism_hgrid_cached(grid_file, overwrite_cache=False)
     # sanity check for illegal boundaries, in case of which this step will hang
-    gd.compute_bnd()  
+    gd.compute_bnd()
     # improve grid quality
     improve_hgrid(gd, n_intersection_fix=0, area_threshold=area_threshold, skewness_threshold=skewness_threshold)
 
