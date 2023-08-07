@@ -288,30 +288,39 @@ class SMS_ARC():
 class SMS_MAP():
     '''class for manipulating SMS maps'''
     def __init__(self, filename=None, arcs=None, detached_nodes=None, epsg=4326):
-        if arcs is None:
-            arcs = []
-        if detached_nodes is None:
-            detached_nodes = []
-
+        # main attributes
         self.epsg = None
         self.arcs = []
-        self.nodes = np.zeros((0, 3))
-        self.detached_nodes = np.zeros((0, 3))
+        self.nodes = None  # expecting to be a 2D array of shape (n_nodes, 3)
+        self.detached_nodes = None  # expecting to be a 2D array of shape (n_nodes, 3)
         self.valid = True
+
+        # read from file if filename is provided
+        if filename is not None:
+            self.reader(filename=filename)
+            return
+
+        # otherwise, initialize from arcs and detached_nodes
+        if arcs is None:
+            self.arcs = []
+        elif type(arcs) == list:
+            self.arcs = arcs
+        elif type(arcs) == np.ndarray:
+            self.arcs = np.squeeze(arcs).tolist()
+
+        if detached_nodes is None:
+            self.detached_nodes = []
+        elif type(detached_nodes) == list:
+            self.detached_nodes = detached_nodes
+        elif type(detached_nodes) == np.ndarray:
+            self.detached_nodes = np.squeeze(detached_nodes).tolist()
 
         self.epsg = epsg
 
-        if filename is not None:
-            self.reader(filename=filename)
+        if arcs == [] and detached_nodes==[]:
+            self.valid = False
         else:
-            if type(arcs) == np.ndarray:
-                arcs = np.squeeze(arcs).tolist()
-            arcs = list(filter(lambda item: item is not None, arcs))
-            if arcs == [] and detached_nodes==[]:
-                self.valid = False
-
-            self.arcs = arcs
-            self.detached_nodes = detached_nodes
+            self.valid = True
 
     def __add__(self, other):
         self.arcs = self.arcs + other.arcs
