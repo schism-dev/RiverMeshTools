@@ -19,7 +19,8 @@ from pathlib import Path
 import geopandas as gpd
 from shapely.ops import polygonize
 from RiverMapper.river_map_tif_preproc import find_thalweg_tile, Tif2XYZ
-from RiverMapper.make_river_map import make_river_map, clean_intersections, geos2SmsArcList, Geoms_XY, clean_arcs, Config_make_river_map
+from RiverMapper.make_river_map import make_river_map, clean_intersections, geos2SmsArcList, Geoms_XY, clean_arcs
+from RiverMapper.config_river_map import ConfigRiverMap
 from RiverMapper.SMS import merge_maps, SMS_MAP
 from RiverMapper.util import silentremove
 import warnings
@@ -102,7 +103,7 @@ def river_map_mpi_driver(
     which are fed to make_river_map.py one at a time
 
     Summary of the input parameters:
-    river_map_config: Config_make_river_map object to pass the arguments to make_river_map.py
+    river_map_config: a ConfigRiverMap object to pass the arguments to make_river_map.py
     min_thalweg_buffer: in meters. This is the minimum search range on either side of the thalweg.
                     Because banks will be searched within this range,
                     its value is needed now to identify parent DEM tiles of each thalweg
@@ -127,7 +128,7 @@ def river_map_mpi_driver(
 
     # configurations (parameters) for make_river_map()
     if river_map_config is None:
-        river_map_config = Config_make_river_map()  # use default configurations
+        river_map_config = ConfigRiverMap()  # use default configurations
 
     rank = comm.Get_rank()
     size = comm.Get_size()
