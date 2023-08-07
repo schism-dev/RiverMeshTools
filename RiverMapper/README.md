@@ -1,6 +1,7 @@
 % RiverMapper
 
 # DEM-based meshing aid for compound flooding 
+![Watershed rivers](http://ccrm.vims.edu/yinglong/feiye/Public/RiverMapper_images/Intro.jpg)
 
 ## Installation 
 Python 3.9 or above is recommended
