@@ -1168,7 +1168,11 @@ def make_river_map(
     xyz[:, 0], xyz[:, 1] = lonlat2cpp(xyz[:, 0], xyz[:, 1])
 
     # Read additional field (dummy) if available. All dummy thalwegs will be preserved as is.
-    dummy = gpd.read_file(thalweg_shp_fname)['dummy'].values
+    try:
+        dummy = gpd.read_file(thalweg_shp_fname)['dummy'].values
+    except:
+        print(f'{mpi_print_prefix} warning: no dummy field found in {thalweg_shp_fname}, all thalwegs will be processed')
+        dummy = np.zeros((len(l2g), ), dtype=int)
 
     # Optional (deprecated): provide a smoothed thalweg (on the 2D plane, not smoothed in z) to guide vertices distribution.
     # The default option is to let the script do the smoothing

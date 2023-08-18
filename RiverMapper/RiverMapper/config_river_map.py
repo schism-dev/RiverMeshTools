@@ -126,7 +126,7 @@ class ConfigRiverMap():
         '''
         return cls(i_pseudo_channel = 1, pseudo_channel_width = 18,
                    nrow_pseudo_channel = 4, length_width_ratio = 50.0,
-                   snap_point_reso_ratio = -2e-5,
+                   snap_point_reso_ratio = -1e-5,  # negative value means abosolute value (lon/lat)
                    i_smooth_banks = False, river_threshold = (18, 18), min_arcs = 4)
 
     @classmethod

@@ -21,7 +21,7 @@ from shapely.ops import polygonize
 from RiverMapper.river_map_tif_preproc import find_thalweg_tile, Tif2XYZ
 from RiverMapper.make_river_map import make_river_map, clean_intersections, geos2SmsArcList, Geoms_XY, clean_arcs
 from RiverMapper.config_river_map import ConfigRiverMap
-from RiverMapper.SMS import merge_maps, SMS_MAP
+from RiverMapper.SMS import merge_maps, SMS_MAP, get_all_points_from_shp
 from RiverMapper.util import silentremove
 import warnings
 
@@ -124,7 +124,9 @@ def river_map_mpi_driver(
     cache_folder = Path(cache_folder)
     thalweg_shp_fname = Path(thalweg_shp_fname)
     output_dir = Path(output_dir)
-    dems_json_file = Path(dems_json_file)
+
+    if dems_json_file is not None:  # accomodate the case when dems_json_file is not provided, e.g., for levees
+        dems_json_file = Path(dems_json_file)
 
     # configurations (parameters) for make_river_map()
     if river_map_config is None:
@@ -140,35 +142,49 @@ def river_map_mpi_driver(
     comm.Barrier()
 
     thalwegs2tile_groups, tile_groups_files, tile_groups2thalwegs = None, None, None
+
     if rank == 0:
-        print(f'A total of {size} core(s) used.')
-        silentremove(output_dir)
-        output_dir.mkdir(parents=True, exist_ok=True)
+        if dems_json_file is not None:
+            print(f'A total of {size} core(s) used.')
+            silentremove(output_dir)
+            output_dir.mkdir(parents=True, exist_ok=True)
 
-        if i_grouping_cache:
-            cache_folder.mkdir(parents=True, exist_ok=True)
-            cache_name = Path(f'{cache_folder}/{dems_json_file.name}_{thalweg_shp_fname.name}_grouping.cache')
-            try:
-                with open(cache_name, 'rb') as file:
-                    print(f'Reading grouping info from cache ...')
-                    thalwegs2tile_groups, tile_groups_files, tile_groups2thalwegs = pickle.load(file)
-            except FileNotFoundError:
-                print(f"Grouping cache does not exist at {cache_folder}. Cache will be generated after grouping.")
-
-        if thalwegs2tile_groups is None:
-            thalwegs2tile_groups, tile_groups_files, tile_groups2thalwegs = find_thalweg_tile(
-                dems_json_file=dems_json_file,
-                thalweg_shp_fname=thalweg_shp_fname,
-                thalweg_buffer = thalweg_buffer,
-                iNoPrint=bool(rank), # only rank 0 prints to screen
-                i_thalweg_cache=i_thalweg_cache
-            )
             if i_grouping_cache:
-                with open(cache_name, 'wb') as file:
-                    pickle.dump([thalwegs2tile_groups, tile_groups_files, tile_groups2thalwegs], file)
+                cache_folder.mkdir(parents=True, exist_ok=True)
+                cache_name = Path(f'{cache_folder}/{dems_json_file.name}_{thalweg_shp_fname.name}_grouping.cache')
+                try:
+                    with open(cache_name, 'rb') as file:
+                        print(f'Reading grouping info from cache ...')
+                        thalwegs2tile_groups, tile_groups_files, tile_groups2thalwegs = pickle.load(file)
+                except FileNotFoundError:
+                    print(f"Grouping cache does not exist at {cache_folder}. Cache will be generated after grouping.")
 
-    if np.all(np.equal(tile_groups_files, None)):
-        raise ValueError(f'No DEM tiles found for the thalwegs in {thalweg_shp_fname}')
+            if thalwegs2tile_groups is None:
+                thalwegs2tile_groups, tile_groups_files, tile_groups2thalwegs = find_thalweg_tile(
+                    dems_json_file=dems_json_file,
+                    thalweg_shp_fname=thalweg_shp_fname,
+                    thalweg_buffer = thalweg_buffer,
+                    iNoPrint=bool(rank), # only rank 0 prints to screen
+                    i_thalweg_cache=i_thalweg_cache
+                )
+                if i_grouping_cache:
+                    with open(cache_name, 'wb') as file:
+                        pickle.dump([thalwegs2tile_groups, tile_groups_files, tile_groups2thalwegs], file)
+
+            if np.all(np.equal(tile_groups_files, None)):
+                raise ValueError(f'No DEM tiles found for the thalwegs in {thalweg_shp_fname}')
+        else:  # accomodate the case when dems_json_file is not provided, e.g., for levees
+            n_group = size * 10
+            xyz, l2g, curv, perp = get_all_points_from_shp(thalweg_shp_fname, iCache=i_thalweg_cache, cache_folder=cache_folder)
+            n_thalweg = len(l2g)
+            # build groups by evenly dividing n_thalweg thalwegs into n_group groups
+            tile_groups2thalwegs = np.array(np.array_split(range(n_thalweg), n_group), dtype=object)
+            # map each thalweg to a group
+            thalwegs2tile_groups = np.zeros((n_thalweg, ), dtype=int)
+            for i, tile_group2thalwegs in enumerate(tile_groups2thalwegs):
+                thalwegs2tile_groups[tile_group2thalwegs] = i
+            # dummy files for each group
+            tile_groups_files = np.array([[None] for _ in range(n_group)])
 
     thalwegs2tile_groups = comm.bcast(thalwegs2tile_groups, root=0)
     tile_groups_files = comm.bcast(tile_groups_files, root=0)
@@ -192,7 +208,7 @@ def river_map_mpi_driver(
     # if the reading is not successful, then regenerate the cache for the corresponding DEM tiles.
     # The actual reading of DEM caches is done in make_river_map()
     # This is why both this driver and make_river_map() have the same i_DEM_cache option
-    if river_map_config.optional['i_DEM_cache']:
+    if dems_json_file is not None and river_map_config.optional['i_DEM_cache']:
         unique_tile_files = []
         for group in tile_groups_files:
             for file in group:
@@ -267,9 +283,10 @@ def river_map_mpi_driver(
         )
 
         # merge dummy arcs into total_arcs_cleaned
-        if len(total_dummy_map.arcs) > 0:
-            total_arcs_cleaned = total_arcs_cleaned + total_dummy_map.arcs
-            total_arcs_cleaned = [arc for arc in total_arcs_map.to_GeoDataFrame().geometry.unary_union.geoms]
+        if total_dummy_map is not None:
+            if len(total_dummy_map.arcs) > 0:
+                total_arcs_cleaned = total_arcs_cleaned + total_dummy_map.arcs
+                total_arcs_cleaned = [arc for arc in total_arcs_map.to_GeoDataFrame().geometry.unary_union.geoms]
 
         SMS_MAP(arcs=geos2SmsArcList(total_arcs_cleaned)).writer(filename=f'{output_dir}/total_arcs.map')
 

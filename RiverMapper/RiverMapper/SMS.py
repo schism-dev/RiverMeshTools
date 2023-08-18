@@ -219,7 +219,7 @@ def merge_maps(mapfile_glob_str, merged_fname):
         map_list = [SMS_MAP(filename=map_file) for map_file in map_file_list]
 
         total_map = map_list[0]
-        for map in map_list[1:]:
+        for i, map in enumerate(map_list[1:]):
             total_map += map
         total_map.writer(merged_fname)
     else:
@@ -290,9 +290,9 @@ class SMS_MAP():
     def __init__(self, filename=None, arcs=None, detached_nodes=None, epsg=4326):
         # main attributes
         self.epsg = None
-        self.arcs = []
+        self.arcs = []  # expecting to be a list of SMS_ARC
         self.nodes = None  # expecting to be a 2D array of shape (n_nodes, 3)
-        self.detached_nodes = None  # expecting to be a 2D array of shape (n_nodes, 3)
+        self.detached_nodes = None  # expecting to be a 2D array of shape (n_detached_nodes, 3)
         self.valid = True
 
         # read from file if filename is provided
@@ -309,15 +309,17 @@ class SMS_MAP():
             self.arcs = np.squeeze(arcs).tolist()
 
         if detached_nodes is None:
-            self.detached_nodes = []
+            self.detached_nodes = np.zeros((0, 3), dtype=float)
         elif type(detached_nodes) == list:
-            self.detached_nodes = detached_nodes
+            self.detached_nodes = np.array(detached_nodes)
         elif type(detached_nodes) == np.ndarray:
-            self.detached_nodes = np.squeeze(detached_nodes).tolist()
+            self.detached_nodes = detached_nodes
 
         self.epsg = epsg
 
-        if arcs == [] and detached_nodes==[]:
+        if arcs == [] and len(detached_nodes) == 0:
+            self.valid = False
+        elif np.all(np.array(arcs) == None) and np.all(np.array(detached_nodes) == None):
             self.valid = False
         else:
             self.valid = True
@@ -347,6 +349,8 @@ class SMS_MAP():
         self.n_detached_nodes = 0
 
         arc_nodes = []
+        self.detached_nodes = np.zeros((0, 3), dtype=float)
+        self.nodes = np.zeros((0, 3), dtype=float)
         with open(filename) as f:
             while True:
                 line = f.readline()
@@ -391,7 +395,7 @@ class SMS_MAP():
         import os
 
         if not self.valid:
-            print(f'No arcs found in map, aborting writing to {filename}')
+            print(f'No features found in map, aborting writing to {filename}')
             return
 
         fpath = os.path.dirname(filename)
