@@ -182,7 +182,7 @@ def river_map_mpi_driver(
             # map each thalweg to a group
             thalwegs2tile_groups = np.zeros((n_thalweg, ), dtype=int)
             for i, tile_group2thalwegs in enumerate(tile_groups2thalwegs):
-                thalwegs2tile_groups[tile_group2thalwegs] = i
+                thalwegs2tile_groups[tile_group2thalwegs.astype(int)] = i
             # dummy files for each group
             tile_groups_files = np.array([[None] for _ in range(n_group)])
 

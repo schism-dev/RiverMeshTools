@@ -139,6 +139,31 @@ class Geoms_XY():
         new_xyz = self.xy[unique_rows, :]
         self.snap_to_points(new_xyz)
 
+def z_encoder(int_info:np.ndarray):
+    '''
+    encode information as 2-digit integers in z's decimal part
+    int_info: a 2-d integer array, each column is a list of integers to be encoded
+    '''
+
+    if np.any(int_info > 99) or np.any(int_info < 0):
+        raise ValueError('int_list must be positive and less than 100')
+
+    # the integer part is the number of integers in the list
+    n_info = int_info.shape[1]
+    if n_info> 6:
+        raise ValueError('int_info must not be more than 6 columns')
+
+    # convert int_info to string
+    str_info = np.apply_along_axis(''.join, axis=1, arr=np.char.zfill(int_info.astype(str), 2))
+    # add prefix to each row, which is the number of integers in the list
+    str_info = np.core.defchararray.add(f'{n_info}.', str_info)
+
+    encoded_float = str_info.astype(float)
+
+    return encoded_float
+
+def z_decoder(z):
+    pass
 
 def moving_average(a, n=10, self_weights=0):
     if a.shape[0] <= n:
@@ -1494,14 +1519,27 @@ def make_river_map(
                         bank_arcs_final[i, 0] = SMS_ARC(points=np.c_[line[valid_points, 0], line[valid_points, 1], z_centerline[valid_points]], src_prj='cpp')
                     elif k == len(x_river_arcs)-1:  # right bank
                         bank_arcs_final[i, 1] = SMS_ARC(points=np.c_[line[valid_points, 0], line[valid_points, 1], z_centerline[valid_points]], src_prj='cpp')
-                    # save inner arcs
+                    # save river arcs
                     river_arcs[i, k] = SMS_ARC(points=np.c_[line[valid_points, 0], line[valid_points, 1], z_centerline[valid_points]], src_prj='cpp')
-                    river_arcs_extra[i, k] = SMS_ARC(points=np.c_[line[valid_points, 0], line[valid_points, 1], np.ones((n_valid_points, 1)) * this_nrow_arcs], src_prj='cpp', proj_z=False)
-                    # save centerline
-                    if k == int(len(x_river_arcs)/2):
-                        centerlines[i] = SMS_ARC(points=np.c_[line[valid_points, 0], line[valid_points, 1], z_centerline[valid_points]], src_prj='cpp')
+                    # save extra info in the z field
+                    z_info = np.c_[  # at most 6 pieces of info are allowed to be saved
+                        np.ones((n_valid_points, 1), dtype=int) * this_nrow_arcs,  # number of along-channel arcs
+                        (np.zeros((n_valid_points, 1)) + (k==0)+(k==len(x_river_arcs)-1)).astype(bool).astype(int) # if this is an outer-most arc
+                    ]
+                    z_encoded = z_encoder(z_info)
+                    river_arcs_extra[i, k] = SMS_ARC(points=np.c_[line[valid_points, 0], line[valid_points, 1], z_encoded], src_prj='cpp', proj_z=False)
                     # save bombed points
                     bombed_points = np.r_[bombed_points, np.c_[line[bombed_idx, 0], line[bombed_idx, 1], width[bombed_idx]/(this_nrow_arcs-1)]]
+
+                # save centerline
+                if len(x_river_arcs) % 2 == 1:  # odd number of arcs
+                    k = int((len(x_river_arcs)-1)/2)
+                    line = np.c_[x_river_arcs[k], y_river_arcs[k]]
+                else:  # even number of arcs
+                    k1 = int(len(x_river_arcs)/2 - 1)
+                    k2 = int(len(x_river_arcs)/2)
+                    line = np.c_[(x_river_arcs[k1]+x_river_arcs[k2])/2, (y_river_arcs[k1]+y_river_arcs[k2])/2]
+                centerlines[i] = SMS_ARC(points=np.c_[line[valid_points, 0], line[valid_points, 1], z_centerline[valid_points]], src_prj='cpp')
 
                 # test bombs
                 for l in [0, 1]:
@@ -1528,17 +1566,18 @@ def make_river_map(
 
     # -----------------------------------diagnostic outputs ----------------------------
     if i_DiagnosticOutput:
-        if any(river_arcs.flatten()) and i_pseudo_channel != 1:  # not all arcs are None
-            SMS_MAP(arcs=bank_arcs.reshape((-1, 1))).writer(filename=f'{output_dir}/{output_prefix}bank.map')
-            SMS_MAP(arcs=bank_arcs_raw.reshape((-1, 1))).writer(filename=f'{output_dir}/{output_prefix}bank_raw.map')
-            SMS_MAP(arcs=cc_arcs.reshape((-1, 1))).writer(filename=f'{output_dir}/{output_prefix}cc_arcs.map')
-            SMS_MAP(arcs=river_arcs.reshape((-1, 1))).writer(filename=f'{output_dir}/{output_prefix}river_arcs.map')
+        if any(river_arcs.flatten()):  # not all arcs are None
             SMS_MAP(arcs=river_arcs_extra.reshape((-1, 1))).writer(filename=f'{output_dir}/{output_prefix}river_arcs_extra.map')
-            SMS_MAP(detached_nodes=bombed_points).writer(filename=f'{output_dir}/{output_prefix}relax_points.map')
-            SMS_MAP(arcs=smoothed_thalwegs).writer(filename=f'{output_dir}/{output_prefix}smoothed_thalweg.map')
-            SMS_MAP(arcs=redistributed_thalwegs_pre_correction).writer(filename=f'{output_dir}/{output_prefix}redist_thalweg_pre_correction.map')
-            SMS_MAP(arcs=redistributed_thalwegs_after_correction).writer(filename=f'{output_dir}/{output_prefix}redist_thalweg_after_correction.map')
-            SMS_MAP(arcs=corrected_thalwegs).writer(filename=f'{output_dir}/{output_prefix}corrected_thalweg.map')
+            SMS_MAP(arcs=river_arcs.reshape((-1, 1))).writer(filename=f'{output_dir}/{output_prefix}river_arcs.map')
+            SMS_MAP(arcs=bank_arcs.reshape((-1, 1))).writer(filename=f'{output_dir}/{output_prefix}bank.map')
+            if i_pseudo_channel != 1:  # skip the following outputs if it is a pseudo channel
+                SMS_MAP(arcs=bank_arcs_raw.reshape((-1, 1))).writer(filename=f'{output_dir}/{output_prefix}bank_raw.map')
+                SMS_MAP(arcs=cc_arcs.reshape((-1, 1))).writer(filename=f'{output_dir}/{output_prefix}cc_arcs.map')
+                SMS_MAP(detached_nodes=bombed_points).writer(filename=f'{output_dir}/{output_prefix}relax_points.map')
+                SMS_MAP(arcs=smoothed_thalwegs).writer(filename=f'{output_dir}/{output_prefix}smoothed_thalweg.map')
+                SMS_MAP(arcs=redistributed_thalwegs_pre_correction).writer(filename=f'{output_dir}/{output_prefix}redist_thalweg_pre_correction.map')
+                SMS_MAP(arcs=redistributed_thalwegs_after_correction).writer(filename=f'{output_dir}/{output_prefix}redist_thalweg_after_correction.map')
+                SMS_MAP(arcs=corrected_thalwegs).writer(filename=f'{output_dir}/{output_prefix}corrected_thalweg.map')
         else:
             print(f'{mpi_print_prefix} No arcs found, aborted writing to *.map')
 
@@ -1648,3 +1687,7 @@ def make_river_map(
             del total_river_outline_polys
 
         del total_arcs_cleaned[:]; del total_arcs_cleaned
+
+
+if __name__ == "__main__":
+    pass
