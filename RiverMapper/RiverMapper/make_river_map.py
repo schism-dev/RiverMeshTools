@@ -756,11 +756,12 @@ def CloseArcs(polylines: gpd.GeoDataFrame):
     return polylines.geometry.to_list(), polylines
 
 
-def clean_intersections(arcs=None, target_polygons=None, snap_points: np.ndarray=None, buffer_coef=0.3, idummy=False, i_OCSMesh=False):
+def clean_intersections(arcs=None, target_polygons=None, snap_points: np.ndarray=None, buffer_coef=0.3, idummy=False, i_OCSMesh=False, projected_crs='esri:102008'):
     '''
     Clean arcs (LineStringList, a list of Shapely's LineString objects)
     by first intersecting them (by unary_union),
-    then snapping target points (within 'target_polygons') to 'snap_points',
+    then snapping target points (within 'target_polygons') to 'snap_points'.
+    A projected_crs is required for projecting the default lon/lat coordinates to a projected coordinate system.
     '''
 
     arcs0 = deepcopy(arcs)
@@ -809,17 +810,17 @@ def clean_intersections(arcs=None, target_polygons=None, snap_points: np.ndarray
         if len(arcs_cleaned_2) > 0 and not i_OCSMesh:
             print('cleaning arcs around river intersections ...')
             arcs_cleaned_2_gdf = gpd.GeoDataFrame(crs='epsg:4326', index=range(len(arcs_cleaned_2)), geometry=arcs_cleaned_2)
-            tmp_gdf = arcs_cleaned_2_gdf.to_crs("esri:102008")
-            reso_gs = gpd.GeoSeries(map(Point, snap_points[:, :2]), crs='epsg:4326').to_crs('esri:102008')
+            tmp_gdf = arcs_cleaned_2_gdf.to_crs(projected_crs)
+            reso_gs = gpd.GeoSeries(map(Point, snap_points[:, :2]), crs='epsg:4326').to_crs(projected_crs)
             _, idx = nearest_neighbour(np.c_[tmp_gdf.centroid.x, tmp_gdf.centroid.y], np.c_[reso_gs.x, reso_gs.y])
 
             arc_buffer = dl_lonlat2cpp(snap_points[idx, 2] * buffer_coef, snap_points[idx, 1])
-            line_buf_gdf = arcs_cleaned_2_gdf.to_crs('esri:102008').buffer(distance=arc_buffer)
+            line_buf_gdf = arcs_cleaned_2_gdf.to_crs(projected_crs).buffer(distance=arc_buffer)
 
             arc_points = Geoms_XY(geom_list=arcs_cleaned_2, crs='epsg:4326', add_z=True)
 
             arc_pointsInPolys = gpd.tools.sjoin(
-                points2GeoDataFrame(arc_points.xy, crs='epsg:4326').to_crs('esri:102008'),
+                points2GeoDataFrame(arc_points.xy, crs='epsg:4326').to_crs(projected_crs),
                 gpd.GeoDataFrame(geometry=line_buf_gdf), predicate="within", how='left'
             )
             arcs_buffer = [None] * len(arcs_cleaned_2)
@@ -839,15 +840,23 @@ def clean_intersections(arcs=None, target_polygons=None, snap_points: np.ndarray
             i_invalid = np.zeros((len(arc_points.xy), ), dtype=bool)
             i_invalid[invalid_point_idx] = True
             arc_points.snap_to_points(snap_points=arc_points.xy[~i_invalid, :])
-            arcs_cleaned_2 = np.array([arc for arc in gpd.GeoDataFrame(geometry=arc_points.geom_list).unary_union.geoms], dtype=object)
+
+            if len(arc_points.geom_list) > 1:
+                arcs_cleaned_2 = np.array([arc for arc in gpd.GeoDataFrame(geometry=arc_points.geom_list).unary_union.geoms], dtype=object)
+            else:
+                arcs_cleaned_2 = np.array([arc_points.geom_list[0]])
 
             # gdf = gpd.GeoDataFrame(geometry=cleaned_inter_arcs, crs='epsg:4326')
-            # arcs_in_poly = gpd.tools.sjoin(gdf.to_crs('esri:102008'), target_poly_gdf.to_crs('esri:102008'), predicate="within", how='left')
+            # arcs_in_poly = gpd.tools.sjoin(gdf.to_crs(projected_crs), target_poly_gdf.to_crs(projected_crs), predicate="within", how='left')
             # arcs_in_poly = arcs_in_poly.to_crs('epsg:4326')
             # polys = np.unique(arcs_in_poly.index_right)
             # hull_list = [arcs_in_poly[arcs_in_poly.index_right==poly].unary_union.convex_hull.boundary for poly in polys]
             # cleaned_inter_arcs = np.array(cleaned_inter_arcs + hull_list)
-        cleaned_arcs = gpd.GeoDataFrame(geometry=np.r_[arcs_cleaned_1, arcs_cleaned_2]).unary_union.geoms
+        
+        if len(arcs_cleaned_1) + len(arcs_cleaned_2) > 1:
+            cleaned_arcs = gpd.GeoDataFrame(geometry=np.r_[arcs_cleaned_1, arcs_cleaned_2]).unary_union.geoms
+        else:
+            cleaned_arcs = gpd.GeoDataFrame(geometry=np.r_[arcs_cleaned_1, arcs_cleaned_2])
 
     return [arc for arc in cleaned_arcs]
 
@@ -1076,7 +1085,7 @@ def make_river_map(
         outer_arcs_positions = (), R_coef=0.4, length_width_ratio = 6.0,
         along_channel_reso_thres = (5, 300),
         i_blast_intersection = False, blast_radius_scale = 0.5, bomb_radius_coef = 0.3,
-        i_real_clean = False,
+        i_real_clean = False, projection_for_cleaning = 'esri:102008',
         snap_point_reso_ratio = 0.3, snap_arc_reso_ratio = 0.2,
         i_close_poly = True, i_smooth_banks = True,
         output_prefix = '', mpi_print_prefix = '', i_OCSMesh = False, i_DiagnosticOutput = False,
@@ -1108,6 +1117,8 @@ def make_river_map(
     - i_blast_intersection: whether to replace intersecting arcs (often noisy) at river intersections with scatter points (cleaner)
     - blast_radius_scale:  coef controlling the blast radius at intersections, a larger number leads to more intersection features being deleted
     - bomb_radius_coef:  coef controlling the spacing among intersection joints, a larger number leads to sparser intersection joints
+    - i_real_clean: experimental procedure to further clean intersecting river arcs
+    - projection_for_cleaning:  a projected coordinate system for cleaning intersecting river arcs, specify one that is suitable for the area of interest
     - snap_point_reso_ratio:  scaling the threshold of the point snapping; a negtive number means absolute distance value
     - snap_arc_reso_ratio:  scaling the threshold of the arc snapping; a negtive number means absolute distance value
     - i_DEM_cache : Whether or not to read DEM info from cache.
@@ -1621,7 +1632,11 @@ def make_river_map(
 
     if len(total_arcs_cleaned) > 0:
         if output_prefix == '':  # clean river intersections if in serial mode
-            total_arcs_cleaned = clean_intersections(arcs=total_arcs_cleaned, target_polygons=bomb_polygons, snap_points=bombed_xyz, i_OCSMesh=i_OCSMesh)
+            total_arcs_cleaned = clean_intersections(
+                arcs=total_arcs_cleaned, target_polygons=bomb_polygons,
+                snap_points=bombed_xyz, i_OCSMesh=i_OCSMesh,
+                projected_crs=projection_for_cleaning
+            )
         else:  # if in parallel mode, defer river intersections until merging is complete
             pass
         total_arcs_cleaned = clean_arcs(

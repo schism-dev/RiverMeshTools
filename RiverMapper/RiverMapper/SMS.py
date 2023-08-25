@@ -304,6 +304,7 @@ class SMS_MAP():
         if arcs is None:
             self.arcs = []
         elif type(arcs) == list:
+            arcs = [arc for arc in arcs if arc is not None]
             self.arcs = arcs
         elif type(arcs) == np.ndarray:
             self.arcs = np.squeeze(arcs).tolist()
@@ -311,15 +312,16 @@ class SMS_MAP():
         if detached_nodes is None:
             self.detached_nodes = np.zeros((0, 3), dtype=float)
         elif type(detached_nodes) == list:
+            detached_nodes = [node for node in detached_nodes if node is not None]
             self.detached_nodes = np.array(detached_nodes)
         elif type(detached_nodes) == np.ndarray:
             self.detached_nodes = detached_nodes
 
         self.epsg = epsg
 
-        if arcs == [] and len(detached_nodes) == 0:
+        if self.arcs == [] and len(self.detached_nodes) == 0:
             self.valid = False
-        elif np.all(np.array(arcs) == None) and np.all(np.array(detached_nodes) == None):
+        elif np.all(np.array(self.arcs) == None) and np.all(self.detached_nodes == None):
             self.valid = False
         else:
             self.valid = True
@@ -425,6 +427,8 @@ class SMS_MAP():
 
             node_counter = 0
             for i, arc in enumerate(self.arcs):
+                if arc is None:
+                    continue
                 for j, node in enumerate(arc.nodes):
                     node_counter += 1
                     self.arcs[i].arcnode_glb_ids[j] = node_counter
@@ -434,6 +438,8 @@ class SMS_MAP():
                     f.write('END\n')
 
             for i, node in enumerate(self.detached_nodes):
+                if node is None:
+                    continue
                 node_counter += 1
                 f.write('POINT\n')
                 f.write(f'XY {node[0]} {node[1]} {node[2]}\n')
@@ -441,6 +447,8 @@ class SMS_MAP():
                 f.write('END\n')
 
             for i, arc in enumerate(self.arcs):
+                if arc is None:
+                    continue
                 f.write('ARC\n')
                 f.write(f'ID {i+1}\n')
                 f.write('ARCELEVATION 0.00\n')

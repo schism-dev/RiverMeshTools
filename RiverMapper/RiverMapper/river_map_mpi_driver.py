@@ -64,6 +64,7 @@ def merge_outputs(output_dir):
 
     total_centerlines = merge_maps(f'{output_dir}/*centerlines.map', merged_fname=f'{output_dir}/total_centerlines.map')
     merge_maps(f'{output_dir}/*bank_final*.map', merged_fname=f'{output_dir}/total_banks_final.map')
+    merge_maps(f'{output_dir}/*bank_raw.map', merged_fname=f'{output_dir}/total_banks_raw.map')
 
     # # shapefiles
     river_outline_files = glob(f'{output_dir}/*_river_outline.shp')
@@ -193,9 +194,9 @@ def river_map_mpi_driver(
     if rank == 0:
         print(f'Thalwegs are divided into {len(tile_groups2thalwegs)} groups.')
         for i, tile_group2thalwegs in enumerate(tile_groups2thalwegs):
-            print(f'[ Group {i+1} ]-----------------------------------------------------------------------\n' + \
-                  f'Group {i+1} includes the following thalwegs (idx starts from 0): {tile_group2thalwegs}\n' + \
-                  f'Group {i+1} needs the following DEMs: {tile_groups_files[i]}\n')
+            print(f'[ Group {i} (group id starting from 0) ]-----------------------------------------------------------------------\n' + \
+                  f'Group {i} includes the following thalwegs (idx starts from 0): {tile_group2thalwegs}\n' + \
+                  f'Group {i} needs the following DEMs: {tile_groups_files[i]}\n')
         print(f'Grouping took: {time.time()-time_grouping_start} seconds')
 
     comm.barrier()
@@ -239,7 +240,7 @@ def river_map_mpi_driver(
 
     for i, (my_group_id, my_tile_group, my_tile_group_thalwegs) in enumerate(zip(my_group_ids, my_tile_groups, my_tile_groups_thalwegs)):
         time_this_group_start = time.time()
-        print(f'Rank {rank}: Group {i+1} (global: {my_group_id}) started ...')
+        print(f'Rank {rank}: Group {i} (global: {my_group_id}) started ...')
         # update some parameters in the config file
         river_map_config.optional['output_prefix'] = f'Group_{my_group_id}_{rank}_{i}_'
         river_map_config.optional['mpi_print_prefix'] = f'[Rank {rank}, Group {i+1} of {len(my_tile_groups)}, global: {my_group_id}] '
@@ -251,7 +252,7 @@ def river_map_mpi_driver(
             **river_map_config.optional,  # pass all optional parameters with a dictionary
         )
 
-        print(f'Rank {rank}: Group {i+1} (global: {my_group_id}) run time: {time.time()-time_this_group_start} seconds.')
+        print(f'Rank {rank}: Group {i} (global: {my_group_id}) run time: {time.time()-time_this_group_start} seconds.')
 
     print(f'Rank {rank}: total run time: {time.time()-time_all_groups_start} seconds.')
 
