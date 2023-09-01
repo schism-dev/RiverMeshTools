@@ -4,6 +4,8 @@ This script provides a class to configure the parameters of make_river_map.
 Parameter presets are also provided  as class methods for different usage scenarios.
 """
 
+# global variables
+cpp_crs = "+proj=eqc +lat_ts=0 +lat_0=0 +lon_0=0 +x_0=0 +y_0=0 +ellps=WGS84 +datum=WGS84 +units=m +no_defs"
 
 class ConfigRiverMap():
     '''A class to handle the configuration of the river map generation,
@@ -30,7 +32,7 @@ class ConfigRiverMap():
         outer_arcs_positions = (), R_coef=0.4, length_width_ratio = 6.0,
         along_channel_reso_thres = (5, 300),
         i_blast_intersection = False, blast_radius_scale = 0.5, bomb_radius_coef = 0.3,
-        i_real_clean = False, projection_for_cleaning = 'esri:102008',
+        i_real_clean = False, projection_for_cleaning = cpp_crs,
         i_close_poly = True, i_smooth_banks = True,
         snap_point_reso_ratio = 0.3, snap_arc_reso_ratio = 0.2,
         output_prefix = '', mpi_print_prefix = '', i_OCSMesh = False, i_DiagnosticOutput = False,

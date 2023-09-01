@@ -639,15 +639,16 @@ if __name__ == "__main__":
     # # Sample usage
 
     # get arguments from command line
-    grid_file, skewness_threshold, area_threshold = cmd_line_interface()
+    # grid_file, skewness_threshold, area_threshold = cmd_line_interface()
 
     # or set arguments manually
-    # grid_file = '/sciclone/schism10/Hgrid_projects/STOFS3D-V6/v17_subset/new10/Test/new10.2dm_fix_bad_eles_round_5.2dm'
-    # skewness_threshold = 30
-    # area_threshold = 5
+    grid_file = '/sciclone/schism10/Hgrid_projects/OCSMesh/lower_res_renum.2dm'
+    skewness_threshold = 30
+    area_threshold = 5
 
     # read grid into schism_grid object
     gd = read_schism_hgrid_cached(grid_file, overwrite_cache=False)
+    gd.proj(prj0='epsg:4326', prj1='esri:102008')
     # sanity check for illegal boundaries, in case of which this step will hang
     gd.compute_bnd()
     # improve grid quality

@@ -3,35 +3,46 @@ This is the core script for generating river maps.
 
 In serial mode, import the function "make_river_map" as follows:
 'from RiverMapper.make_river_map import make_river_map'
-, and  directly call the function "make_river_map()".
+, and directly call the function "make_river_map()".
 
-In parallel mode, call the function indirectly through
+In parallel mode, call the same function through
 the parallel driver "river_map_mpi_driver.py".
 
-Download sample applications including sample scripts and inputs
-for both the serial mode and the parallel mode here:
+Download sample applications including sample scripts and inputs for
+both the serial mode and the parallel mode here:
 http://ccrm.vims.edu/yinglong/feiye/Public/RiverMapper_Samples.tar
 """
 
 
+# Standard library imports
 from builtins import ValueError
-import os
 from copy import deepcopy
-import pandas as pd
+import math
+import os
+
+# Related third-party imports
+import geopandas as gpd
 import numpy as np
+import pandas as pd
 from scipy import interpolate
 from scipy.spatial import cKDTree
+from shapely.geometry import LineString, MultiLineString, MultiPoint, Point
+from shapely.ops import linemerge, polygonize, snap, split, unary_union
 from sklearn.neighbors import NearestNeighbors
-import math
-from shapely.geometry import LineString, Point, MultiPoint, MultiLineString
-from shapely.ops import polygonize, unary_union, split, snap, linemerge
-import geopandas as gpd
-from RiverMapper.SMS import get_all_points_from_shp, curvature, get_perpendicular_angle
-from RiverMapper.SMS import SMS_ARC, SMS_MAP, cpp2lonlat, lonlat2cpp, dl_cpp2lonlat, dl_lonlat2cpp
+
+# Local application/library specific imports
+from RiverMapper.SMS import (
+    SMS_ARC, SMS_MAP, cpp2lonlat, curvature, dl_cpp2lonlat, 
+    dl_lonlat2cpp, get_all_points_from_shp, get_perpendicular_angle, 
+    lonlat2cpp
+)
 from RiverMapper.river_map_tif_preproc import Tif2XYZ, get_elev_from_tiles
 
-
 # np.seterr(all='raise')  # Needs more attention, see Issue #1
+
+# global variables
+cpp_crs = "+proj=eqc +lat_ts=0 +lat_0=0 +lon_0=0 +x_0=0 +y_0=0 +ellps=WGS84 +datum=WGS84 +units=m +no_defs"
+
 class Bombs():
     def __init__(self, xyz: np.ndarray, crs='epsg:4326'):
         if xyz.size == 0:
@@ -139,31 +150,9 @@ class Geoms_XY():
         new_xyz = self.xy[unique_rows, :]
         self.snap_to_points(new_xyz)
 
-def z_encoder(int_info:np.ndarray):
-    '''
-    encode information as 2-digit integers in z's decimal part
-    int_info: a 2-d integer array, each column is a list of integers to be encoded
-    '''
-
-    if np.any(int_info > 99) or np.any(int_info < 0):
-        raise ValueError('int_list must be positive and less than 100')
-
-    # the integer part is the number of integers in the list
-    n_info = int_info.shape[1]
-    if n_info> 6:
-        raise ValueError('int_info must not be more than 6 columns')
-
-    # convert int_info to string
-    str_info = np.apply_along_axis(''.join, axis=1, arr=np.char.zfill(int_info.astype(str), 2))
-    # add prefix to each row, which is the number of integers in the list
-    str_info = np.core.defchararray.add(f'{n_info}.', str_info)
-
-    encoded_float = str_info.astype(float)
-
-    return encoded_float
-
-def z_decoder(z):
-    pass
+# ------------------------------------------------------------------
+# low level functions mainly for basic geometric processing
+# ------------------------------------------------------------------
 
 def moving_average(a, n=10, self_weights=0):
     if a.shape[0] <= n:
@@ -250,6 +239,36 @@ def ccw(A,B,C):
 # Return true if line segments AB and CD intersect
 def intersect(A,B,C,D):
     return ccw(A,C,D) != ccw(B,C,D) and ccw(A,B,C) != ccw(A,B,D)
+
+# ------------------------------------------------------------------
+# higher level functions for specific tasks involved in river map generation
+# ------------------------------------------------------------------
+
+def z_encoder(int_info:np.ndarray):
+    '''
+    encode information as 2-digit integers in z's decimal part
+    int_info: a 2-d integer array, each column is a list of integers to be encoded
+    '''
+
+    if np.any(int_info > 99) or np.any(int_info < 0):
+        raise ValueError('int_list must be positive and less than 100')
+
+    # the integer part is the number of integers in the list
+    n_info = int_info.shape[1]
+    if n_info> 6:
+        raise ValueError('int_info must not be more than 6 columns')
+
+    # convert int_info to string
+    str_info = np.apply_along_axis(''.join, axis=1, arr=np.char.zfill(int_info.astype(str), 2))
+    # add prefix to each row, which is the number of integers in the list
+    str_info = np.core.defchararray.add(f'{n_info}.', str_info)
+
+    encoded_float = str_info.astype(float)
+
+    return encoded_float
+
+def z_decoder(z):
+    pass
 
 def smooth_thalweg(line, ang_diff_shres=np.pi/2.4, nmax=100, smooth_coef=0.2):
     xs = line[:, 0]
@@ -637,7 +656,7 @@ def snap_closeby_points_global(pt_xyz:np.ndarray, snap_point_reso_ratio=None, n_
     # Type-II points:
     # The last of n_nei neighbors is outside the search radius and the closest neighbor is within the search radius,
     # so we only need to deal with at most n_nei neighbors.
-    # Although most points fall in this category, we only loop through n_nei neighbors for each point
+    # Although a large number of points fall in this category, we only need to loop through n_nei neighbors for each point
     nbrs = NearestNeighbors(n_neighbors=min(npts, n_nei)).fit(xyz)
     distances, indices = nbrs.kneighbors(xyz)
     distances[distances==0.0] = 9999
@@ -727,6 +746,104 @@ def snap_closeby_lines_global(lines, snap_arc_reso_ratio):
     lines = [line for line in gpd.GeoDataFrame(geometry=lines).unary_union.geoms]
     return lines
 
+def snap_points_to_lines(arc_points, snap_arc_reso):
+    # deprecated, slow when there are many points
+
+    from pylib import mdist
+    points = deepcopy(arc_points.xy)
+
+    # split lines into segments (a segment only has two points)
+    n_seg = 0
+    for line in arc_points.geom_list:
+        n_seg += len(line.coords) - 1
+    lines = np.zeros((n_seg, 4), dtype=float)
+
+    n_seg = 0
+    for pt_idx_per_line in arc_points.xy_idx:
+        idx = np.arange(pt_idx_per_line[0], pt_idx_per_line[1])
+        seg_idx = np.column_stack((idx[:-1], idx[1:]))  # each row is a segment
+        line_xy = points[seg_idx, :2].reshape(-1, 4)  # convert to mdist's line format
+        lines[n_seg:n_seg+len(idx)-1, :] = line_xy
+        n_seg += len(idx) - 1
+
+    dists = mdist(points[:, :2], lines, fmt=1, outfmt=3)
+    target_pt_idx = dists < snap_arc_reso
+
+    arc_points.snap_to_points(points[~target_pt_idx])
+
+    return arc_points
+
+def snap_points_to_lines2(arc_points, snap_arc_reso):
+
+    # ------begin nested functions---------------------------
+    # Function to calculate distance between a point and a segment
+    # adapted from pylib
+    def mdist(xy,lxy):
+        '''
+        find the minimum distance of c_[x,y] to a set of lines lxy
+          lxy=c_[x1,y1,x2,y2]: each row is a line (x1,y1) -> (x2,y2)
+        
+          output: minimum distance of each point to all lines (return a matrix)
+        '''
+
+        xy = np.atleast_2d(xy); lxy = np.atleast_2d(lxy)
+        x,y=xy.T[:,:,None]; x1,y1,x2,y2=lxy.T[:,None,:]
+
+        #initialize output
+        dist=np.nan*np.ones([x.size,x1.size])
+
+        #compute the foot of a perpendicular, and distance between pts
+        k=-((x1-x)*(x2-x1)+(y1-y)*(y2-y1))/((x1-x2)**2+(y1-y2)**2); xn=k*(x2-x1)+x1; yn=k*(y2-y1)+y1
+        fpn=(k>=0)*(k<=1); dist[fpn]=abs((x+1j*y)-(xn+1j*yn))[fpn] #normal line
+        dist[~fpn]=np.array(np.r_[abs((x+1j*y)-(x1+1j*y1))[None,...], abs((x+1j*y)-(x2+1j*y2))[None,...]]).min(axis=0)[~fpn] #pt-pt dist
+
+        return dist
+
+    # Function to find approximate distances to nearest segments for a vertex
+    def find_nearest_distances_approx(points, segments, tree, n_nearest):
+        # Query the KD-tree for nearest segments within threshold
+        _, segment_indices = tree.query(points, k=n_nearest)
+
+        # Calculate distances for candidate segments
+        distances = np.zeros((len(points), n_nearest))
+        for i, [point, seg_ind] in enumerate(zip(points, segment_indices)):
+            candidate_segments = segments[seg_ind, :]
+            distances[i] = mdist(point, candidate_segments)
+
+        return distances
+    # ------end nested functions---------------------------
+
+    points = arc_points.xy
+
+    # split lines into segments (a segment only has two points)
+    # first, find the number of segments and initialize a np array
+    n_seg = 0
+    for line in arc_points.geom_list:
+        n_seg += len(line.coords) - 1
+    segs = np.zeros((n_seg, 4), dtype=float)
+    # fill in the segments
+    n_seg = 0
+    for pt_idx_per_line in arc_points.xy_idx:
+        idx = np.arange(pt_idx_per_line[0], pt_idx_per_line[1])
+        seg_idx = np.column_stack((idx[:-1], idx[1:]))  # each row is a segment
+        line_xy = points[seg_idx, :2].reshape(-1, 4)  # convert to mdist's line format: x1, y1, x2, y2 for each row
+        segs[n_seg:n_seg+len(idx)-1, :] = line_xy
+        n_seg += len(idx) - 1
+    seg_midpoints = np.c_[(segs[:, 0] + segs[:, 2])/2, (segs[:, 1] + segs[:, 3])/2]
+
+    # build a kd-tree for faster querying
+    tree = cKDTree(seg_midpoints)
+    dists = find_nearest_distances_approx(points[:, :2], segs, tree, n_nearest=min(30, n_seg))  # 30 adjacent segs is enough for most cases
+    # dists is of shape (n_points, n_nearest)
+    dists = np.where(dists == 0, np.nan, dists)  # ignore zero distance, i.e., a point is a segment's endpoint
+                                                # the real 0 point-seg distance should not exist by this point due to previous unary_union
+    dists = np.nanmin(dists, axis=1)  # the smallest non-zero distance of each row is the distance from that point to the nearest segment
+
+    target_pt_idx = dists >= snap_arc_reso  # identify valid points, which are not too close to any segment
+    arc_points.snap_to_points(points[target_pt_idx])  # snap to the valid points, i.e., removing the invalid points
+
+    return arc_points
+
 def CloseArcs(polylines: gpd.GeoDataFrame):
     '''
     Close polylines whose endpoints are not connected to other polylines.
@@ -756,7 +873,10 @@ def CloseArcs(polylines: gpd.GeoDataFrame):
     return polylines.geometry.to_list(), polylines
 
 
-def clean_intersections(arcs=None, target_polygons=None, snap_points: np.ndarray=None, buffer_coef=0.3, idummy=False, i_OCSMesh=False, projected_crs='esri:102008'):
+def clean_intersections(
+        arcs=None, target_polygons=None, snap_points: np.ndarray=None,
+        buffer_coef=0.3, idummy=False, i_OCSMesh=False, projected_crs=cpp_crs
+    ):
     '''
     Clean arcs (LineStringList, a list of Shapely's LineString objects)
     by first intersecting them (by unary_union),
@@ -864,36 +984,48 @@ def clean_arcs(arcs, snap_point_reso_ratio, snap_arc_reso_ratio, i_real_clean=Fa
     print('cleaning all arcs iteratively ...')
 
     # snap with a smaller threshold in the first few iterations to avoid snapping to a further point
-    progressive_ratio = np.array([0.2, 0.4, 0.8, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0])
-    for i, ratio in enumerate(snap_point_reso_ratio * progressive_ratio):
-        print(f'Iterration {i}: cleaning with ratio = {ratio}')
+    progressive_ratio = np.array([0.2, 0.4, 0.6, 0.8, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0])
+    for i, _ in enumerate(progressive_ratio):
+        ratio = snap_point_reso_ratio * progressive_ratio[i]
+        print(f'Snapping nearby points, Iterration {i}: cleaning with ratio = {ratio}')
         arc_points = Geoms_XY(geom_list=arcs, crs='epsg:4326', add_z=True)
 
         # pre-cleaning
         if i_real_clean:
             arc_points.snap_to_self(tolerance=2e-5)  # in degrees, roughly 2m
 
+        # points close to each other
         xyz, nsnap = snap_closeby_points_global(arc_points.xy, snap_point_reso_ratio=snap_point_reso_ratio)
-
         if nsnap == 0 and progressive_ratio[i] == max(progressive_ratio):  # no more snapping
             break
-
         arc_points.update_coords(xyz)
         arcs_gdf = gpd.GeoDataFrame({'index': range(len(arcs)),'geometry': arc_points.geom_list})
-
         arcs = [arc for arc in arcs_gdf.geometry.unary_union.geoms]
+
+        # points close to lines
         if i_real_clean:
-            arcs = snap_closeby_lines_global(arcs, snap_arc_reso_ratio=snap_arc_reso_ratio)
+            # arcs = snap_closeby_lines_global(arcs, snap_arc_reso_ratio=snap_arc_reso_ratio)
+            ratio2 = 0.2 * progressive_ratio[i]
+            if ratio2 > 0.12:
+                continue
+
+            print(f'Snapping points close to lines, Iterration {i}: cleaning with ratio2 = {ratio2}')
+
+            arc_points = Geoms_XY(geom_list=arcs, crs='epsg:4326', add_z=True)
+            arc_points = snap_points_to_lines2(arc_points, snap_arc_reso=arc_points.xy[:, -1]*ratio2)
+            arcs_gdf = gpd.GeoDataFrame({'index': range(len(arcs)),'geometry': arc_points.geom_list})
+            arcs = [arc for arc in arcs_gdf.geometry.unary_union.geoms]
 
     if i > len(progressive_ratio):
         print(f'warning: cleaning terminated prematurely after {i} iterations')
+
     # arcs, arcs_gdf = CloseArcs(arcs_gdf)
 
     # snap nearby lines
 
     return arcs
 
-def clean_river_arcs(river_arcs=None, total_arcs=None):
+def clean_river_arcs_for_ocsmesh(river_arcs=None, total_arcs=None):
 
     total_arcs_geomsxy = Geoms_XY(total_arcs, crs="epsg:4326")
 
@@ -929,7 +1061,7 @@ def generate_river_outline_polys(river_arcs=None):
 
 def clean_arcs0(LineStringList, blast_center, blast_radius, minimum_arc_length=10):
     '''
-    Early version of clean_arcs, to be deprecated.
+    Early version of clean_arcs, deprecated.
     '''
     uu = gpd.GeoDataFrame({'index': range(len(LineStringList)),'geometry': LineStringList}).geometry.unary_union
 
@@ -996,44 +1128,33 @@ def improve_thalwegs(S_list, dl, line, search_length, perp, mpi_print_prefix, el
         xts = np.linspace(x, xt, __search_steps, axis=1)
         yts = np.linspace(y, yt, __search_steps, axis=1)
 
-        ''' One tile
-        [jj, ii], valid = Sidx(S, xts[:], yts[:])
-        if valid.all():
-            elevs = S.elev[ii, jj]
-            low = np.argpartition(elevs, min(10, elevs.shape[1]-1), axis=1)
-            thalweg_idx = np.median(low[:, :10], axis=1).astype(int)
+        elevs = get_elev_from_tiles(xts, yts, S_list, scale=elev_scale)
+        if elevs is None:
+            continue
 
-            x_new[:, k] = xts[range(len(x)), thalweg_idx]
-            y_new[:, k] = yts[range(len(x)), thalweg_idx]
-            elev_new[:, k] = elevs[range(len(x)), thalweg_idx]
-        else:
-            return np.c_[x, y], False  # return orignial thalweg
-        '''
-        # multiple tiles in a tile list
-        elevs = get_elev_from_tiles(xts, yts, S_list) * elev_scale
+        # elevs is well defined for the rest of the loop if we reach here
         if np.isnan(elevs).any():
-            print(f'{mpi_print_prefix} Warning: nan found in elevs\n' + \
-                  f'when trying to improve Thalweg: {np.c_[x, y]}')
-            continue
+            print(f'{mpi_print_prefix} Warning: nan found in elevs when trying to improve Thalweg: {np.c_[x, y]}')
+            continue  # aborting thalweg improvement
 
-        if elevs is not None:
-            if elevs.shape[1] < 2:
-                print(f'{mpi_print_prefix} Warning: elevs shape[1] < 2')
-                continue
+        if elevs.shape[1] < 2:
+            print(f'{mpi_print_prefix} Warning: elevs shape[1] < 2, not enough valid elevations when trying to improve Thalweg: {np.c_[x, y]}')
+            continue  # aborting thalweg improvement
 
-            n_low = min(10, elevs.shape[1]-1)
-            low = np.argpartition(elevs, n_low, axis=1)
-            thalweg_idx = np.median(low[:, :n_low], axis=1).astype(int)
+        # instead of using the minimum, we use the median of the lowest 10 elevations to avoid the noise in bathymetry
+        n_low = min(10, elevs.shape[1]-1)
+        low = np.argpartition(elevs, n_low, axis=1)
+        thalweg_idx = np.median(low[:, :n_low], axis=1).astype(int)
 
-            if any(thalweg_idx<0) or any(thalweg_idx>=xts.shape[1]):
-                continue
+        if any(thalweg_idx<0) or any(thalweg_idx>=xts.shape[1]):
+            print(f'{mpi_print_prefix} Warning: invalid thalweg index after improvement: {np.c_[x, y]}')
+            continue  # aborting thalweg improvement
 
-            x_new[:, k] = xts[range(len(x)), thalweg_idx]
-            y_new[:, k] = yts[range(len(x)), thalweg_idx]
-            elev_new[:, k] = elevs[range(len(x)), thalweg_idx]
-            i_corrected = True
-        else:
-            continue
+        x_new[:, k] = xts[range(len(x)), thalweg_idx]
+        y_new[:, k] = yts[range(len(x)), thalweg_idx]
+        elev_new[:, k] = elevs[range(len(x)), thalweg_idx]
+
+        i_corrected = True  # improvement successful if we reach here, i.e., at least one side is improved
 
     left_or_right = elev_new[:, 0] > elev_new[:, 1]
     x_real = x_new[range(len(x)), left_or_right.astype(int)]  # if left higher than right, then use right
@@ -1057,9 +1178,11 @@ def get_bank(S_list, x, y, thalweg_eta, xt, yt, search_steps=100, search_toleran
 
     eta_stream = np.tile(thalweg_eta.reshape(-1, 1), (1, search_steps))  # expanded to the search area
 
-    elevs = get_elev_from_tiles(xts, yts, S_list) * elev_scale
+    elevs = get_elev_from_tiles(xts, yts, S_list, scale=elev_scale)
     if elevs is None:
-        return None, None
+        return None, None  # return None for both banks
+    
+    # elevs is well defined if we reach here
 
     R = (elevs - eta_stream)  # closeness to target depth
     bank_idx = np.argmax(R>0, axis=1)
@@ -1085,7 +1208,7 @@ def make_river_map(
         outer_arcs_positions = (), R_coef=0.4, length_width_ratio = 6.0,
         along_channel_reso_thres = (5, 300),
         i_blast_intersection = False, blast_radius_scale = 0.5, bomb_radius_coef = 0.3,
-        i_real_clean = False, projection_for_cleaning = 'esri:102008',
+        i_real_clean = False, projection_for_cleaning = cpp_crs,
         snap_point_reso_ratio = 0.3, snap_arc_reso_ratio = 0.2,
         i_close_poly = True, i_smooth_banks = True,
         output_prefix = '', mpi_print_prefix = '', i_OCSMesh = False, i_DiagnosticOutput = False,
@@ -1094,44 +1217,36 @@ def make_river_map(
     '''
     [Core routine for making river maps]
     <Mandatory Inputs>:
-    - tif_fnames: a list of TIF file names. These TIFs should cover the area of interest and be arranged by priority (higher priority ones in front)
-    - thalweg_shp_fname: name of a polyline shapefile containing the thalwegs
-    - output_dir: must specify one.
+    | tif_fnames (or a \*.json file if there are many tiles) | a list of TIF file names. These TIFs should cover the area of interest and be arranged by priority (higher priority ones in front) |
+    | thalweg_shp_fname | name of a polyline shapefile containing the thalwegs |
+    | output_dir | must specify one. |
 
     <Optional Inputs>:
-    These inputs can also be handled by the ConfigRiverMap class (recommended).
-    - selected_thalweg: indices of selected thalwegs for which the river arcs will be sought.
-    - output_prefix: a prefix of the output files, mainly used by the caller of this script; can be empty
-    - mpi_print_prefix: a prefix string to identify the calling mpi processe in the output messages; can be empty
-    - MapUnit2METER = 1:  to be replaced by projection code, e.g., epsg: 4326, esri: 120008, etc.
-    - river_threshold:  minimum and maximum river widths (in meters) to be resolved
-    - min_arcs: minimum number of arcs to resolve a channel (including bank arcs, inner arcs and outer arcs)
-    - elev_scale:  scaling factor for elevations; a number of -1 (invert elevations) is useful for finding ridges (e.g., of a barrier island)
-    - outer_arc_positions: relative position of outer arcs, e.g., (0.1, 0.2) will add 2 outer arcs on each side of the river (4 in total),
-        at 0.1*riverwidth and 0.2*riverwidth from the banks.
-    - R_coef:  coef controlling the along-channel resolutions at river bends (with a radius of R), a larger number leads to coarser resolutions (R*R_coef)
-    - length_width_ratio: a ratio of element length in the along-channel direction to river width;
-        when a river is narrower than the lower limit, the bank will be nudged (see next parameter) to widen the river
-    - along_channel_reso_thres: minimum and maximum resolutions (in meters) in the along-channel direction
-    - i_close_poly: whether to add cross-channel arcs to enclose river arcs into a polygon
-    - i_blast_intersection: whether to replace intersecting arcs (often noisy) at river intersections with scatter points (cleaner)
-    - blast_radius_scale:  coef controlling the blast radius at intersections, a larger number leads to more intersection features being deleted
-    - bomb_radius_coef:  coef controlling the spacing among intersection joints, a larger number leads to sparser intersection joints
-    - i_real_clean: experimental procedure to further clean intersecting river arcs
-    - projection_for_cleaning:  a projected coordinate system for cleaning intersecting river arcs, specify one that is suitable for the area of interest
-    - snap_point_reso_ratio:  scaling the threshold of the point snapping; a negtive number means absolute distance value
-    - snap_arc_reso_ratio:  scaling the threshold of the arc snapping; a negtive number means absolute distance value
-    - i_DEM_cache : Whether or not to read DEM info from cache.
-        Reading from original *.tif files can be slow, so the default option is True
-    - i_OCSMesh: Whether or not to generate outputs to be used as inputs to OCSMesh.
-    - i_DiagnosticsOutput: whether to output diagnostic information
-    - i_pseudo_channel:
-        =0: default, no pseudo channel, nrow_pseudo_channel and pseudo_channel_width are ignored
-        =1: fixed-width channel with nrow elements in the cross-channel direction,
-          it can also be used to generate a fixed-width levee for a given levee centerline
-        =2: implement a pseudo channel when the river is poorly defined in DEM
-    - pseudo_channel_width:  width of the pseudo channel (in meters)
-    - nrow_pseudo_channel:  number of rows of elements in the cross-channel direction in the pseudo channel
+    These inputs can also be handled by the ConfigRiverMap class (recommended; see details in the online manual).
+    | selected_thalweg | integer numpy array | Indices of a subset of thalwegs for which the river arcs will be sought; mainly used by the parallel driver |
+    | output_prefix | string | a prefix of the output files, mainly used by the caller of this script; can be empty |
+    | mpi_print_prefix | string | a prefix string to identify the calling mpi processe in the output messages; can be empty |
+    | MapUnit2METER = 1 | float |  no need to change; to be replaced by projection code, e.g., epsg: 4326, esri: 120008, etc. |
+    | river_threshold | float | minimum and maximum river widths (in meters) to be resolved |
+    | min_arcs | integer | minimum number of arcs to resolve a channel (including bank arcs, inner arcs and outer arcs) |
+    | elev_scale | float | scaling factor for elevations; a number of -1 (invert elevations) is useful for finding ridges (e.g., of a barrier island) |
+    | outer_arc_positions | a list/tuple of floats | relative position of outer arcs, e.g., (0.1, 0.2) will add 2 outer arcs on each side of the river (4 in total), 0.1 \* riverwidth and 0.2 \* riverwidth from the banks. |
+    | R_coef | float | coef controlling the along-channel resolutions at river bends (with a radius of R), a larger number leads to coarser resolutions (R*R_coef) |
+    | length_width_ratio | float |  a ratio of element length in the along-channel direction to river width; when a river is narrower than the lower limit, the bank will be nudged (see next parameter) to widen the river |
+    | i_close_poly | bool | whether to add cross-channel arcs to enclose river arcs into a polygon |
+    | i_blast_intersection | bool | whether to replace intersecting arcs (often noisy) at river intersections with scatter points (cleaner) |
+    | blast_radius_scale | float | coefficient controlling the blast radius at intersections, a larger number leads to more intersection features being deleted |
+    | bomb_radius_coef | float | coefficient controlling the spacing among intersection joints, a larger number leads to sparser intersection joints |
+    | i_real_clean | bool | experimental procedure to further clean intersecting river arcs |
+    | projection_for_cleaning | string | a projected coordinate system for cleaning intersecting river arcs, specify one that is suitable for the area of interest |
+    | snap_point_reso_ratio | float | scaling the threshold of the point snapping; a negtive number means absolute distance value |
+    | snap_arc_reso_ratio | float | scaling the threshold of the arc snapping; a negtive number means absolute distance value |
+    | i_DEM_cache  | bool | Whether or not to read DEM info from cache.  Reading from original \*.tif files can be slow, so the default option is True |
+    | i_OCSMesh | bool | Whether or not to generate outputs to be used as inputs to OCSMesh. |
+    | i_DiagnosticsOutput | bool | whether to output diagnostic information |
+    | i_pseudo_channel | int | 0:  default, no pseudo channel, nrow_pseudo_channel and pseudo_channel_width are ignored; 1: fixed-width channel with nrow elements in the cross-channel direction, it can also be used to generate a fixed-width levee for a given levee centerline =2: implement a pseudo channel when the river is poorly defined in DEM
+    | pseudo_channel_width | float | width of the pseudo channel (in meters) |
+    | nrow_pseudo_channel |int| number of rows of elements in the cross-channel direction in the pseudo channel |
 
     <Outputs>:
     - total_arcs.shp: a polyline shapefile containing all the river arcs
@@ -1196,6 +1311,11 @@ def make_river_map(
                 search_length = river_threshold[-1] * 1.1
                 search_steps = int(river_threshold[-1] / dl)
 
+                # gdf = gpd.GeoDataFrame(df, geometry=[Point(xy) for xy in np.c_[S.lon[:2], S.lat[:2]]])
+                # gdf.crs = "EPSG:4326"
+                # cpp_proj = "+proj=eqc +lat_ts=0 +lat_0=0 +lon_0=0 +x_0=0 +y_0=0 +ellps=WGS84 +datum=WGS84 +units=m +no_defs"
+                # gdf = gdf.to_crs(cpp_proj)
+
         if nvalid_tile == 0:
             raise ValueError('Fatal Error: no valid DEM tiles')
 
@@ -1253,17 +1373,17 @@ def make_river_map(
             continue
 
         if require_dem:
-            elevs = get_elev_from_tiles(thalweg[:, 0], thalweg[:, 1], S_list) * elev_scale
+            elevs = get_elev_from_tiles(thalweg[:, 0], thalweg[:, 1], S_list, scale=elev_scale)
             if elevs is None:
                 print(f"{mpi_print_prefix} warning: some elevs not found on thalweg {i+1}, the thalweg will be neglected ...")
                 valid_thalwegs[i] = False
                 continue
 
             # set water level at each point along the thalweg, based on observation, simulation, estimation, etc.
-            if elev_scale < 0:  # invert z for barrier island
-                thalweg_eta = 0.0 * elevs
+            if elev_scale < 0:  # invert z, often used for barrier island
+                thalweg_eta = 0.0 * elevs  # barrier islands are always nearshore, where 0.0 is a good approximation of the water level
             else:  # normal case
-                thalweg_eta = set_eta_thalweg(thalweg[:, 0], thalweg[:, 1], elevs)
+                thalweg_eta = set_eta_thalweg(thalweg[:, 0], thalweg[:, 1], elevs)  # more sophisticated methods for water level approximation
 
             x_banks_left, y_banks_left, x_banks_right, y_banks_right, _, width = \
                 get_two_banks(S_list, thalweg, thalweg_eta, search_length, search_steps,
@@ -1281,12 +1401,12 @@ def make_river_map(
             thalweg_endpoints_width[i*2+1] = width[-1]
 
         if len(thalweg[:, 0]) < 2:
-            print(f"{mpi_print_prefix} warning: thalweg {i+1} only has one point, neglecting ...")
+            print(f"{mpi_print_prefix} warning: thalweg {i+1} only has one point, discarding ...")
             valid_thalwegs[i] = False
             continue
 
         if x_banks_left is None or x_banks_right is None:
-            print(f"{mpi_print_prefix} warning: thalweg {i+1} out of DEM coverage, neglecting ...")
+            print(f"{mpi_print_prefix} warning: thalweg {i+1} out of DEM coverage, discarding ...")
             valid_thalwegs[i] = False
             continue
 
@@ -1362,7 +1482,9 @@ def make_river_map(
             quality_controlled = False  # need to be tested for real channels
 
             # update thalweg info
-            elevs = get_elev_from_tiles(thalweg[:, 0],thalweg[:, 1], S_list) * elev_scale
+            elevs = get_elev_from_tiles(thalweg[:, 0],thalweg[:, 1], S_list, scale=elev_scale)
+            if elevs is None:
+                raise ValueError(f"{mpi_print_prefix} error: some elevs not found on thalweg {i+1} ...")
 
             if elev_scale < 0:  # invert z for barrier island
                 thalweg_eta = 0.0 * elevs
@@ -1399,7 +1521,9 @@ def make_river_map(
             final_thalwegs[i] = SMS_ARC(points=np.c_[thalweg[:, 0], thalweg[:, 1]], src_prj='cpp')
 
             # update thalweg info
-            elevs = get_elev_from_tiles(thalweg[:, 0],thalweg[:, 1], S_list) * elev_scale
+            elevs = get_elev_from_tiles(thalweg[:, 0],thalweg[:, 1], S_list, scale=elev_scale)
+            if elevs is None:
+                raise ValueError(f"{mpi_print_prefix} error: some elevs not found on thalweg {i+1} ...")
 
             if elev_scale < 0:  # invert z for barrier island
                 thalweg_eta = 0.0 * elevs
@@ -1689,7 +1813,7 @@ def make_river_map(
         del total_arcs_cleaned_polys[:]; del total_arcs_cleaned_polys
 
         if i_OCSMesh:
-            cleaned_river_arcs = clean_river_arcs(river_arcs=river_arcs, total_arcs=total_arcs_cleaned)
+            cleaned_river_arcs = clean_river_arcs_for_ocsmesh(river_arcs=river_arcs, total_arcs=total_arcs_cleaned)
             del river_arcs
             total_river_outline_polys = generate_river_outline_polys(river_arcs=cleaned_river_arcs)
             del cleaned_river_arcs

@@ -23,7 +23,7 @@ def lonlat2cpp(lon, lat, lon0=0, lat0=0):
     lon_radian, lat_radian = lon/180*np.pi, lat/180*np.pi
     lon0_radian, lat0_radian = lon0/180*np.pi, lat0/180*np.pi
 
-    xout = R * (lon_radian - lon0_radian) * np.cos(lat0_radian)
+    xout = R * (lon_radian - lon0_radian) # * np.cos(lat0_radian)
     yout = R * lat_radian
 
     return [xout, yout]

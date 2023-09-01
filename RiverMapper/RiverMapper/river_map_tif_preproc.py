@@ -142,7 +142,7 @@ def Sidx(S, lon, lat):
     valid = (i < S.lon.shape) * (j < S.lat.shape) * (i >= 0) * (j >= 0)
     return [i, j], valid
 
-def get_elev_from_tiles(x_cpp, y_cpp, tile_list):
+def get_elev_from_tiles(x_cpp, y_cpp, tile_list, scale=1.0):
     '''
     x: vector of x coordinates, assuming cpp;
     y: vector of x coordinates, assuming cpp;
@@ -161,7 +161,7 @@ def get_elev_from_tiles(x_cpp, y_cpp, tile_list):
         # raise ValueError('failed to find elevation')
         return None
     else:
-        return elevs
+        return elevs * scale
 
 def find_parent_box(pts, boxes, i_overlap=False):
     ndigits = int(math.log10(len(boxes))) + 1  # number of digits needed for representing tile id, e.g., CuDEM (819 tiles) needs 3 digits
