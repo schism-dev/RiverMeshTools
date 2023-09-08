@@ -1758,14 +1758,14 @@ def make_river_map(
     total_arcs_cleaned = [LineString(arc.points[:, :]) for arc in arc_groups if arc is not None]
 
     if len(total_arcs_cleaned) > 0:
-        if output_prefix == '':  # clean river intersections if in serial mode
-            total_arcs_cleaned = clean_intersections(
-                arcs=total_arcs_cleaned, target_polygons=bomb_polygons,
-                snap_points=bombed_xyz, i_OCSMesh=i_OCSMesh,
-                projected_crs=projection_for_cleaning
-            )
-        else:  # if in parallel mode, defer river intersections until merging is complete
-            pass
+        # if output_prefix == '':  # clean river intersections if in serial mode
+        #     total_arcs_cleaned = clean_intersections(
+        #         arcs=total_arcs_cleaned, target_polygons=bomb_polygons,
+        #         snap_points=bombed_xyz, i_OCSMesh=i_OCSMesh,
+        #         projected_crs=projection_for_cleaning
+        #     )
+        # else:  # if in parallel mode, defer river intersections until merging is complete
+        #     pass
         total_arcs_cleaned = clean_arcs(
             arcs=total_arcs_cleaned, i_real_clean=i_real_clean,
             snap_point_reso_ratio=snap_point_reso_ratio, snap_arc_reso_ratio=snap_arc_reso_ratio
