@@ -1445,7 +1445,6 @@ def make_river_map(
         if idummy_thalweg[i]:
             print(f"{mpi_print_prefix} Thalweg {i} is dummy, skipping and keep original arcs ...")
             increment_along_thalweg = get_dist_increment(thalweg[:, :2])  # use along-thalweg resolution as a substitute of cross-channel resolution
-            # only write the first arc of river_arcs[i, :]
             dummy_arcs.append(SMS_ARC(points=np.c_[thalweg[:, 0], thalweg[:, 1], np.r_[increment_along_thalweg, increment_along_thalweg[-1]]], src_prj='cpp'))
             continue
 
@@ -1748,18 +1747,15 @@ def make_river_map(
             xyz = np.c_[bomb.points.real, bomb.points.imag, bomb.res]
             bombed_xyz = np.r_[bombed_xyz, xyz]
 
-    # Clean river intersections
+    # assemble arcs groups for cleaning
+    arc_groups = [arc for river in river_arcs for arc in river if arc is not None]  # river arcs are always included
     if i_close_poly:
-        arc_groups = [river_arcs, cc_arcs]
-    else:
-        arc_groups = [river_arcs]
+        arc_groups += [arc for river in cc_arcs for arc in river if arc is not None]  # one cc (cross-channel) arc at each end of each river
+    if any(idummy_thalweg):  # some thalwegs are dummy, so un-processed
+        arc_groups += [arc for arc in dummy_arcs if arc is not None]
 
-    total_arcs_cleaned = []
-    for arcs in arc_groups:
-        for arc in arcs:
-            for line in arc:
-                if line is not None:
-                    total_arcs_cleaned.append(LineString(line.points[:, :]))
+    # convert to linestrings
+    total_arcs_cleaned = [LineString(arc.points[:, :]) for arc in arc_groups if arc is not None]
 
     if len(total_arcs_cleaned) > 0:
         if output_prefix == '':  # clean river intersections if in serial mode
@@ -1799,8 +1795,6 @@ def make_river_map(
 
         if len(total_arcs_cleaned) > 0:
             SMS_MAP(arcs=geos2SmsArcList(geoms=total_arcs_cleaned)).writer(filename=f'{output_dir}/{output_prefix}total_arcs.map')
-        else:
-            print(f'{mpi_print_prefix} Warning: total_sms_arcs_cleaned empty')
 
         # needed not only for bombing but also for cleaning too, so always write
         if len(bombed_xyz) > 0:
@@ -1831,8 +1825,10 @@ def make_river_map(
             else:
                 print(f'{mpi_print_prefix} Warning: total_river_outline_polys empty')
             del total_river_outline_polys
+    else:
+        print(f'{mpi_print_prefix} Warning: total_sms_arcs_cleaned empty, skip writing to *.map')
 
-        del total_arcs_cleaned[:]; del total_arcs_cleaned
+    del total_arcs_cleaned[:]; del total_arcs_cleaned
 
 
 if __name__ == "__main__":

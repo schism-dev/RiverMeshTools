@@ -267,7 +267,7 @@ def river_map_mpi_driver(
         time_final_cleanup_start = time.time()
 
         total_arcs_cleaned = [arc for arc in total_arcs_map.to_GeoDataFrame().geometry.unary_union.geoms]
-        if not river_map_config.optional['i_blast_intersection']:
+        if False:  # not river_map_config.optional['i_blast_intersection']:
             if os.path.exists(f'{output_dir}/total_bomb_polygons.shp'):
                 bomb_polygons = gpd.read_file(f'{output_dir}/total_bomb_polygons.shp')
             else:
@@ -282,12 +282,6 @@ def river_map_mpi_driver(
             snap_point_reso_ratio=river_map_config.optional['snap_point_reso_ratio'],
             snap_arc_reso_ratio=river_map_config.optional['snap_arc_reso_ratio'],
         )
-
-        # merge dummy arcs into total_arcs_cleaned
-        if total_dummy_map is not None:
-            if len(total_dummy_map.arcs) > 0:
-                total_arcs_cleaned = total_arcs_cleaned + total_dummy_map.arcs
-                total_arcs_cleaned = [arc for arc in total_arcs_map.to_GeoDataFrame().geometry.unary_union.geoms]
 
         SMS_MAP(arcs=geos2SmsArcList(total_arcs_cleaned)).writer(filename=f'{output_dir}/total_arcs.map')
 
