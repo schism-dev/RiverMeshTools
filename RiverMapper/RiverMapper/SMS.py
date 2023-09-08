@@ -497,7 +497,7 @@ class Levee_SMS_MAP(SMS_MAP):
 def get_all_points_from_shp(fname, iNoPrint=True, iCache=False, cache_folder=None):
     if not iNoPrint: print(f'reading shapefile: {fname}')
 
-        # using geopandas, which seems more efficient than pyshp
+    # using geopandas, which seems more efficient than pyshp
     shapefile = gpd.read_file(fname)
     npts = 0
     nvalid_shps = 0

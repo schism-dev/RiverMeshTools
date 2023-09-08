@@ -32,11 +32,11 @@ class ConfigRiverMap():
         outer_arcs_positions = (), R_coef=0.4, length_width_ratio = 6.0,
         along_channel_reso_thres = (5, 300),
         i_blast_intersection = False, blast_radius_scale = 0.5, bomb_radius_coef = 0.3,
-        i_real_clean = False, projection_for_cleaning = cpp_crs,
+        i_real_clean = True, projection_for_cleaning = cpp_crs,
         i_close_poly = True, i_smooth_banks = True,
         snap_point_reso_ratio = 0.3, snap_arc_reso_ratio = 0.2,
         output_prefix = '', mpi_print_prefix = '', i_OCSMesh = False, i_DiagnosticOutput = False,
-        i_pseudo_channel = 0, pseudo_channel_width = 18, nrow_pseudo_channel = 4,
+        i_pseudo_channel = 2, pseudo_channel_width = 18, nrow_pseudo_channel = 4,
     ):
         # see a description of the parameters in the function make_river_map()
         self.optional = {
@@ -81,7 +81,7 @@ class ConfigRiverMap():
         and on both sides of the river.
         The values of outer_arcs_positions are the relative posititions of the river width,
         '''
-        return cls(outer_arcs_positions = (0.1, 0.2), i_real_clean = False)
+        return cls(outer_arcs_positions = (0.1, 0.2), i_real_clean = True)
 
     @classmethod
     def BombedIntersections(cls):
@@ -132,12 +132,3 @@ class ConfigRiverMap():
                    i_DiagnosticOutput = True, i_real_clean = True,
                    snap_point_reso_ratio = -1e-5,  # negative value means abosolute value (lon/lat)
                    i_smooth_banks = False, river_threshold = (18, 18), min_arcs = 4)
-
-    @classmethod
-    def PseudoChannels(cls):
-        '''
-        Expand all thalwegs (in this case levee centerlines)
-        to channels (in this case levees with two feet and a flat top)
-        of a fixed width (in this case foot-to-foot width)
-        '''
-        return cls(i_pseudo_channel = 2, pseudo_channel_width = 30, nrow_pseudo_channel = 4)

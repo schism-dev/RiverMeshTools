@@ -88,7 +88,7 @@ if __name__ == "__main__":
     # rivermap_fname = f'/sciclone/schism10/Hgrid_projects/STOFS3D-V6/v16.2/Feeder/total_river_arcs1.map'
     # grid_fname = '/sciclone/schism10/Hgrid_projects/STOFS3D-V6/v16.2/Feeder/hgrid.ll'
     # grid_boundary_shp = '/sciclone/schism10/Hgrid_projects/STOFS3D-V6/v16/Shapefiles/boundary.shp'
-    output_dir = '/sciclone/schism10/Hgrid_projects/STOFS3D-V6/v17_subset/Feeder/'
+    output_dir = '/sciclone/schism10/Hgrid_projects/STOFS3D-V6/v18_subset/Feeder/'
     rivermap_fname = f'/sciclone/schism10/Hgrid_projects/STOFS3D-V6/v16.2/Feeder/total_river_arcs1.map'
     grid_fname = '/sciclone/schism10/Hgrid_projects/STOFS3D-V6/v17_subset/Feeder/hgrid.ll'
     grid_boundary_shp = '/sciclone/schism10/Hgrid_projects/STOFS3D-V6/v17_subset/Shapefiles/boundary.shp'

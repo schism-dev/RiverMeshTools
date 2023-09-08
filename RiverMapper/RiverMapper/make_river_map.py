@@ -297,14 +297,14 @@ def smooth_thalweg(line, ang_diff_shres=np.pi/2.4, nmax=100, smooth_coef=0.2):
 
     return line, perp
 
-def river_quality(xs, ys, idx, ang_diff_shres=np.pi/2.4):
+def river_quality(xs, ys, idx):
     # identify channels that are too ambiguous
     if sum(idx) < 2:
         return False
 
     for [x, y] in zip(xs, ys):
         angle_diffs = abs(np.r_[0.0, get_angle_diffs(x[idx], y[idx]), 0.0])
-        if np.sum(angle_diffs)/len(x[idx]) > 0.8:
+        if np.mean(angle_diffs) > 1.8:
             print(f'discarding arc based on the number of sharp turns\n')
             return False
 
@@ -980,7 +980,7 @@ def clean_intersections(
 
     return [arc for arc in cleaned_arcs]
 
-def clean_arcs(arcs, snap_point_reso_ratio, snap_arc_reso_ratio, i_real_clean=False):
+def clean_arcs(arcs, snap_point_reso_ratio, snap_arc_reso_ratio, i_real_clean=True):
     print('cleaning all arcs iteratively ...')
 
     # snap with a smaller threshold in the first few iterations to avoid snapping to a further point
@@ -1208,11 +1208,11 @@ def make_river_map(
         outer_arcs_positions = (), R_coef=0.4, length_width_ratio = 6.0,
         along_channel_reso_thres = (5, 300),
         i_blast_intersection = False, blast_radius_scale = 0.5, bomb_radius_coef = 0.3,
-        i_real_clean = False, projection_for_cleaning = cpp_crs,
+        i_real_clean = True, projection_for_cleaning = cpp_crs,
         snap_point_reso_ratio = 0.3, snap_arc_reso_ratio = 0.2,
         i_close_poly = True, i_smooth_banks = True,
         output_prefix = '', mpi_print_prefix = '', i_OCSMesh = False, i_DiagnosticOutput = False,
-        i_pseudo_channel = 0, pseudo_channel_width = 18, nrow_pseudo_channel = 4,
+        i_pseudo_channel = 2, pseudo_channel_width = 18, nrow_pseudo_channel = 4,
     ):
     '''
     [Core routine for making river maps]
@@ -1237,14 +1237,14 @@ def make_river_map(
     | i_blast_intersection | bool | whether to replace intersecting arcs (often noisy) at river intersections with scatter points (cleaner) |
     | blast_radius_scale | float | coefficient controlling the blast radius at intersections, a larger number leads to more intersection features being deleted |
     | bomb_radius_coef | float | coefficient controlling the spacing among intersection joints, a larger number leads to sparser intersection joints |
-    | i_real_clean | bool | experimental procedure to further clean intersecting river arcs |
+    | i_real_clean | bool | further clean intersecting river arcs |
     | projection_for_cleaning | string | a projected coordinate system for cleaning intersecting river arcs, specify one that is suitable for the area of interest |
     | snap_point_reso_ratio | float | scaling the threshold of the point snapping; a negtive number means absolute distance value |
     | snap_arc_reso_ratio | float | scaling the threshold of the arc snapping; a negtive number means absolute distance value |
     | i_DEM_cache  | bool | Whether or not to read DEM info from cache.  Reading from original \*.tif files can be slow, so the default option is True |
     | i_OCSMesh | bool | Whether or not to generate outputs to be used as inputs to OCSMesh. |
     | i_DiagnosticsOutput | bool | whether to output diagnostic information |
-    | i_pseudo_channel | int | 0:  default, no pseudo channel, nrow_pseudo_channel and pseudo_channel_width are ignored; 1: fixed-width channel with nrow elements in the cross-channel direction, it can also be used to generate a fixed-width levee for a given levee centerline =2: implement a pseudo channel when the river is poorly defined in DEM
+    | i_pseudo_channel | int | 0:  default, no pseudo channel, nrow_pseudo_channel and pseudo_channel_width are ignored; 1: fixed-width channel with nrow elements in the cross-channel direction, it can also be used to generate a fixed-width levee for a given levee centerline; 2: implement a pseudo channel when the river is poorly defined in DEM
     | pseudo_channel_width | float | width of the pseudo channel (in meters) |
     | nrow_pseudo_channel |int| number of rows of elements in the cross-channel direction in the pseudo channel |
 
@@ -1473,14 +1473,13 @@ def make_river_map(
             continue
 
         # Find bank arcs and inner arcs
+        quality_controlled = False  # there are 4 cases that quality_controlled is set to True, which are listed below (Case #)
         if i_pseudo_channel == 1:
-            quality_controlled = True  # always true for pseudo channel
+            quality_controlled = True  # (Case 1) always true for pseudo channel
             x_banks_left, y_banks_left, x_banks_right, y_banks_right, _, width = \
                 get_fake_banks(thalweg, const_bank_width=pseudo_channel_width)
             arc_position = set_inner_arc_position(nrow_arcs=nrow_pseudo_channel, type='fake')
-        else:
-            quality_controlled = False  # need to be tested for real channels
-
+        else:  # real channels, try to find banks first
             # update thalweg info
             elevs = get_elev_from_tiles(thalweg[:, 0],thalweg[:, 1], S_list, scale=elev_scale)
             if elevs is None:
@@ -1542,8 +1541,8 @@ def make_river_map(
                     print(f'{mpi_print_prefix} warning: neglecting the thalweg ...')
                     continue
                 elif i_pseudo_channel == 2:
-                    print(f'{mpi_print_prefix} warning: implementing a pseudo channel of width {pseudo_channel_width} ...')
-                    quality_controlled = True  # always true for pseudo channel
+                    print(f'{mpi_print_prefix} warning: banks not found for thalweg {i+1}, implementing a pseudo channel of width {pseudo_channel_width} ...')
+                    quality_controlled = True  # (Case 2): Real river but no banks found, implement a pseudo channel
                     x_banks_left, y_banks_left, x_banks_right, y_banks_right, _, width = \
                         get_fake_banks(thalweg, const_bank_width=pseudo_channel_width)
                     this_nrow_arcs = nrow_pseudo_channel
@@ -1574,10 +1573,18 @@ def make_river_map(
             # end if degenerate case
         # end if fake arcs
 
-        while True:  # quality control loop, exit when quality is good or fallback to pseudo channel
-                     # regardless of quality, the first half of the loop is always executed to assemble everything
-                     # A loop is used here to avoid code duplication because everything needs to be re-assembled when
-                     # quality check fails and pseudo channel is implemented as a fallback
+        valid_points = np.ones(x_banks_left.shape, dtype=bool)  # all true initially
+        while True:
+            # Extra quality control (for blasting) and assemble river/bank arcs
+            # regardless of quality, the first half of the loop is always executed to assemble everything
+            # A loop is used here to avoid code duplication because everything needs to be re-assembled when
+            # quality check fails and pseudo channel is implemented as a fallback
+
+            # the loop also optionally blast intersections,
+            # which is deprecated because the "i_real_clean" option without blasting is more robust
+            # , so this loop is no longer needed and valid_points should always be True.
+            # However, the loop is kept here for backward compatibility for now.
+            # TODO: remove this loop in the future, or make it optional when i_blash_intersection is True
 
             # ------------------------- assemble river arcs ---------------------------
             arc_position = np.r_[-outer_arcs_positions, arc_position, 1.0+outer_arcs_positions].reshape(-1, 1)
@@ -1587,7 +1594,6 @@ def make_river_map(
             z_centerline = width/(this_nrow_arcs-1)  # record cross-channel (cc) resolution at each thalweg point
 
             # determine blast radius based on mean channel width at an intersection
-            valid_points = np.ones(x_banks_left.shape, dtype=bool)
             for k in [0, -1]:  # head and tail
                 dist = thalweg_endpoints[:, :] - thalweg[k, :]
                 # keep the index of self to facilitate the calculation of the blast_radius, which is based on the widths of all intersecting rivers
@@ -1617,12 +1623,12 @@ def make_river_map(
                     real_bank_width[i, j] = ((x_banks_left[valid_points][j]-x_banks_right[valid_points][j])**2 + (y_banks_left[valid_points][j]-y_banks_right[valid_points][j])**2)**0.5
             # ------------------------- end: assemble river arcs ---------------------------
 
-            if quality_controlled:  # some are pre-qualified because they are pseudo channels
+            if quality_controlled:  # some are pre-qualified because they are pseudo channels (either initially or as fallback)
                 break
 
             # quality check
             if river_quality(x_river_arcs, y_river_arcs, valid_points):  # quality check passed
-                quality_controlled = True
+                quality_controlled = True  # Case 3: real river, quality check passed
                 break
             elif i_pseudo_channel == 2:  # quality check failed, fall back to pseudo channel
                 print(f'{mpi_print_prefix} warning: thalweg {i+1} failed quality check, falling back to pseudo channel ...')
@@ -1630,12 +1636,13 @@ def make_river_map(
                     get_fake_banks(thalweg, const_bank_width=pseudo_channel_width)
                 this_nrow_arcs = nrow_pseudo_channel
                 arc_position = set_inner_arc_position(nrow_arcs=nrow_pseudo_channel, type='fake')
-                quality_controlled = True
-                # still need to run part of the loop to assemble everything, so don't break here
+                quality_controlled = True  # Case 4: real river, banks found in the previous step but with bad quality, falling back to pseudo channel
+                # still need to run the first half of the loop to assemble everything, so don't break here
             else:
                 print(f'{mpi_print_prefix} warning: thalweg {i+1} failed quality check, skipping ...')
                 quality_controlled = False
                 break
+        # end quality check and assemble loop
 
         if quality_controlled:
             # save centerlines
