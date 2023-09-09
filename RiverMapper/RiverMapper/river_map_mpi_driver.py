@@ -17,7 +17,9 @@ import numpy as np
 import pickle
 from pathlib import Path
 import geopandas as gpd
+from geopandas.tools import sjoin
 from shapely.ops import polygonize
+from shapely.geometry import Polygon
 from RiverMapper.river_map_tif_preproc import find_thalweg_tile, Tif2XYZ
 from RiverMapper.make_river_map import make_river_map, clean_intersections, geos2SmsArcList, Geoms_XY, clean_arcs
 from RiverMapper.config_river_map import ConfigRiverMap
@@ -27,6 +29,7 @@ import warnings
 
 warnings.filterwarnings("error", category=UserWarning)
 
+cpp_crs = "+proj=eqc +lat_ts=0 +lat_0=0 +lon_0=0 +x_0=0 +y_0=0 +ellps=WGS84 +datum=WGS84 +units=m +no_defs"
 
 def my_mpi_idx(N, size, rank):
     '''
@@ -39,6 +42,61 @@ def my_mpi_idx(N, size, rank):
     my_group_ids = groups[rank]
     i_my_groups[my_group_ids] = True
     return my_group_ids, i_my_groups
+
+def output_OCSMesh(output_dir):
+    time_OCSMesh_start = time.time()
+    # convert linestrings to polygons, which creates extra polygons if a land area is enclosed by river arcs
+    total_arcs_cleaned = gpd.read_file(f'{output_dir}/total_arcs.shp').geometry.tolist()
+    total_arcs_cleaned_polys = [poly for poly in polygonize(gpd.GeoSeries(total_arcs_cleaned))]
+    total_polys = gpd.GeoDataFrame(
+        index=range(len(total_arcs_cleaned_polys)), crs='epsg:4326', geometry=total_arcs_cleaned_polys
+    )
+    total_polys.to_file(filename=f'{output_dir}/total_polys.shp', driver="ESRI Shapefile")
+    # read the pre-generated river outline, which is used to filter out land areas
+    total_polys_cpp = total_polys.to_crs(cpp_crs)
+    total_river_outline_cpp = gpd.read_file(f'{output_dir}/total_river_outline.shp').to_crs(cpp_crs)
+
+    # find the river polygons that are mostly within the river outline; allow for minor non-overlap
+
+    # option 1 incomplete
+    # candidates = gpd.sjoin(total_polys_cpp, total_river_outline_cpp, how="inner", predicate="intersects")
+    # candidates['area'] = candidates.geometry.area
+    # # Find the area of intersections
+    # intersections = gpd.overlay(candidates, total_river_outline_cpp, how='intersection', keep_geom_type=False)
+    # intersections_polygons = intersections[intersections['geometry'].apply(lambda x: isinstance(x, Polygon))].copy()
+    # intersections_polygons['intersection_area'] = intersections_polygons.geometry.area
+    # # Sum the areas for each candidate (grouped by the index of the 'candidates' dataframe)
+    # grouped_areas = intersections_polygons.groupby(intersections_polygons.index)['intersection_area'].sum()
+    # # Merge the summed intersection areas back into the 'candidates' dataframe
+    # candidates = candidates.merge(grouped_areas, left_index=True, right_index=True, how='left')
+
+    # # Calculate the percentage of each candidate that intersects with total_river_outline_cpp
+    # candidates['overlap_percentage'] = (candidates['intersection_area'] / candidates['area']) * 100
+    # # Filter based on your desired overlap percentage
+    # river_polys = candidates[candidates['overlap_percentage'] > 10]
+
+    # option 3: use a buffer and find all polygons strictly within the buffer, faster
+    total_river_outline_cpp_buffer = total_river_outline_cpp.copy()
+    total_river_outline_cpp_buffer['geometry'] = total_river_outline_cpp_buffer.buffer(500)
+    river_polys_idx = sjoin(total_polys_cpp, total_river_outline_cpp_buffer, how="inner", predicate="within").index.tolist()
+    river_polys_idx = list(set(river_polys_idx))  # remove duplicates
+    river_polys = gpd.GeoDataFrame(crs=cpp_crs, geometry=total_polys_cpp.loc[river_polys_idx, 'geometry'])
+
+    # option 2
+    # river_polys = sjoin(total_polys_cpp, total_river_outline_cpp, how="inner", predicate="intersects")
+    # # Calculate the area of the intersection; this step can be slow
+    # intersection_area = river_polys.apply(
+    #     lambda row: row['geometry'].intersection(total_river_outline_cpp.to_crs(cpp_crs).loc[row['index_right'], 'geometry']).area, axis=1)
+    # # this is to filter out land polygons that are largely outside the river outline, so 0.7 or even a smaller value is fine
+    # river_polys = river_polys[intersection_area > 0.7 * river_polys['geometry'].area]
+
+    # write the actual river polygons to file
+    drop_columns=[col for col in river_polys.columns if col not in ['geometry', 'FID']]
+    river_polys = river_polys.drop(drop_columns, axis=1)
+    river_polys = river_polys.drop_duplicates(subset=['geometry']).reset_index(drop=True).to_crs('epsg:4326')
+    river_polys.to_file(filename=f'{output_dir}/total_river_polys_for_OCSMesh.shp', driver="ESRI Shapefile")
+
+    print(f'Outputting : {time.time()-time_OCSMesh_start} seconds.')
 
 def merge_outputs(output_dir):
     print(f'\n------------------ merging outputs from all cores --------------\n')
@@ -267,7 +325,7 @@ def river_map_mpi_driver(
         time_final_cleanup_start = time.time()
 
         total_arcs_cleaned = [arc for arc in total_arcs_map.to_GeoDataFrame().geometry.unary_union.geoms]
-        if False:  # not river_map_config.optional['i_blast_intersection']:
+        if False: # not river_map_config.optional['i_blast_intersection']:  # deprecated
             if os.path.exists(f'{output_dir}/total_bomb_polygons.shp'):
                 bomb_polygons = gpd.read_file(f'{output_dir}/total_bomb_polygons.shp')
             else:
@@ -289,23 +347,11 @@ def river_map_mpi_driver(
             index=range(len(total_arcs_cleaned)), crs='epsg:4326', geometry=total_arcs_cleaned
         ).to_file(filename=f'{output_dir}/total_arcs.shp', driver="ESRI Shapefile")
 
+        print(f'Final clean-ups took: {time.time()-time_final_cleanup_start} seconds.')
+
         # outputs for OCSMesh
         if river_map_config.optional['i_OCSMesh']:
-            total_arcs_cleaned_polys = [poly for poly in polygonize(gpd.GeoSeries(total_arcs_cleaned))]
-            gpd.GeoDataFrame(
-                index=range(len(total_arcs_cleaned_polys)), crs='epsg:4326', geometry=total_arcs_cleaned_polys
-            ).to_file(filename=f'{output_dir}/total_polys_for_OCSMesh.shp', driver="ESRI Shapefile")
-
-        # river_arcs_cleaned = clean_river_arcs(total_river_arcs, total_arcs_cleaned)
-        # total_river_outline_polys = generate_river_outline_polys(river_arcs_cleaned)
-        # if len(total_river_outline_polys) > 0:
-        #     gpd.GeoDataFrame(
-        #         index=range(len(total_river_outline_polys)), crs='epsg:4326', geometry=total_river_outline_polys
-        #     ).to_file(filename=f'{output_dir}/total_river_outline.shp', driver="ESRI Shapefile")
-        # else:
-        #     print(f'Warning: total_river_outline_polys empty')
-
-        print(f'Final clean-ups took: {time.time()-time_final_cleanup_start} seconds.')
+            output_OCSMesh(output_dir)
 
         # delete per-core outputs
         silentremove(glob(f'{output_dir}/Group*'))
