@@ -19,6 +19,8 @@ from builtins import ValueError
 from copy import deepcopy
 import math
 import os
+import sys
+import time
 
 # Related third-party imports
 import geopandas as gpd
@@ -26,8 +28,9 @@ import numpy as np
 import pandas as pd
 from scipy import interpolate
 from scipy.spatial import cKDTree
-from shapely.geometry import LineString, MultiLineString, MultiPoint, Point
-from shapely.ops import linemerge, polygonize, snap, split, unary_union
+from shapely.geometry import LineString, MultiPoint, Point
+from shapely.ops import polygonize, split, unary_union
+from geopandas.tools import sjoin
 from sklearn.neighbors import NearestNeighbors
 
 # Local application/library specific imports
@@ -792,9 +795,15 @@ def snap_points_to_lines2(arc_points, snap_arc_reso):
         #initialize output
         dist=np.nan*np.ones([x.size,x1.size])
 
-        #compute the foot of a perpendicular, and distance between pts
-        k=-((x1-x)*(x2-x1)+(y1-y)*(y2-y1))/((x1-x2)**2+(y1-y2)**2); xn=k*(x2-x1)+x1; yn=k*(y2-y1)+y1
-        fpn=(k>=0)*(k<=1); dist[fpn]=abs((x+1j*y)-(xn+1j*yn))[fpn] #normal line
+        # find if the foot of perpendicular exists on the line segment
+        k=-((x1-x)*(x2-x1)+(y1-y)*(y2-y1))/np.maximum(sys.float_info.epsilon, (x1-x2)**2+(y1-y2)**2)
+        xn=k*(x2-x1)+x1; yn=k*(y2-y1)+y1
+
+        # foot of perpendicular is on the line segment
+        fpn=(k>=0)*(k<=1)
+        dist[fpn]=abs((x+1j*y)-(xn+1j*yn))[fpn]  # pt-line dist
+
+        # foot of perpendicular is not on the line segment
         dist[~fpn]=np.array(np.r_[abs((x+1j*y)-(x1+1j*y1))[None,...], abs((x+1j*y)-(x2+1j*y2))[None,...]]).min(axis=0)[~fpn] #pt-pt dist
 
         return dist
@@ -983,19 +992,15 @@ def clean_intersections(
 def clean_arcs(arcs, snap_point_reso_ratio, snap_arc_reso_ratio, i_real_clean=True):
     print('cleaning all arcs iteratively ...')
 
-    # snap with a smaller threshold in the first few iterations to avoid snapping to a further point
+    # snap within a small neighborhood then progressively enlarges the search radius to avoid aggressive snapping
     progressive_ratio = np.array([0.2, 0.4, 0.6, 0.8, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0])
-    for i, _ in enumerate(progressive_ratio):
-        ratio = snap_point_reso_ratio * progressive_ratio[i]
-        print(f'Snapping nearby points, Iterration {i}: cleaning with ratio = {ratio}')
+    for i, pratio in enumerate(progressive_ratio):
+        ratio1 = snap_point_reso_ratio * pratio
+        print(f'Snapping nearby points, Iterration {i}: cleaning with ratio1 = {ratio1}')
         arc_points = Geoms_XY(geom_list=arcs, crs='epsg:4326', add_z=True)
 
-        # pre-cleaning
-        if i_real_clean:
-            arc_points.snap_to_self(tolerance=2e-5)  # in degrees, roughly 2m
-
         # points close to each other
-        xyz, nsnap = snap_closeby_points_global(arc_points.xy, snap_point_reso_ratio=snap_point_reso_ratio)
+        xyz, nsnap = snap_closeby_points_global(arc_points.xy, snap_point_reso_ratio=ratio1)
         if nsnap == 0 and progressive_ratio[i] == max(progressive_ratio):  # no more snapping
             break
         arc_points.update_coords(xyz)
@@ -1004,11 +1009,7 @@ def clean_arcs(arcs, snap_point_reso_ratio, snap_arc_reso_ratio, i_real_clean=Tr
 
         # points close to lines
         if i_real_clean:
-            # arcs = snap_closeby_lines_global(arcs, snap_arc_reso_ratio=snap_arc_reso_ratio)
-            ratio2 = 0.2 * progressive_ratio[i]
-            if ratio2 > 0.12:
-                continue
-
+            ratio2 = snap_arc_reso_ratio * pratio
             print(f'Snapping points close to lines, Iterration {i}: cleaning with ratio2 = {ratio2}')
 
             arc_points = Geoms_XY(geom_list=arcs, crs='epsg:4326', add_z=True)
@@ -1038,6 +1039,87 @@ def clean_river_arcs_for_ocsmesh(river_arcs=None, total_arcs=None):
 
     return river_arcs_cleaned
 
+def output_OCSMesh(output_dir, arc_shp_fname='total_arcs.shp', outline_shp_fname='total_river_outline.shp'):
+    '''
+    Output the river polygons for OCSMesh.
+    It polygonizes the river arcs, then filters out land polygons that are largely outside the river outline.
+    Input:
+        arc_shp_fname: the name of the shapefile containing all arcs
+        outline_shp_fname: the name of the shapefile containing the river outline
+    Output:
+        total_river_polys.shp: the name of the shapefile containing the river polygons
+    '''
+
+    time_OCSMesh_start = time.time()
+
+    # convert linestrings to polygons, which creates extra polygons if a land area is enclosed by river arcs
+    total_arcs_cleaned = gpd.read_file(f'{output_dir}/{arc_shp_fname}').geometry.tolist()
+    total_arcs_cleaned_polys = [poly for poly in polygonize(gpd.GeoSeries(total_arcs_cleaned))]
+    total_polys = gpd.GeoDataFrame(
+        index=range(len(total_arcs_cleaned_polys)), crs='epsg:4326', geometry=total_arcs_cleaned_polys
+    )
+    # read the pre-generated river outline, which is used to filter out land areas
+    total_polys_cpp = total_polys.to_crs(cpp_crs)
+    total_river_outline_cpp = gpd.read_file(f'{output_dir}/{outline_shp_fname}').to_crs(cpp_crs)
+    
+    # use buffers to roughly filter out land polygons that are largely outside the river outline
+    total_river_outline_cpp_buffer = total_river_outline_cpp.copy()
+    idx_river = [
+        np.zeros((len(total_polys_cpp['geometry']), ), dtype=bool),
+        np.zeros((len(total_polys_cpp['geometry']), ), dtype=bool)
+    ]  # two sets of indices, the first will have a stricter criterion
+
+    # two buffers are used, one stricter and one looser
+    for i, buf in enumerate([100, 1000]):
+        total_river_outline_cpp_buffer['geometry'] = total_river_outline_cpp_buffer.buffer(buf)
+        river_polys_idx = sjoin(total_polys_cpp, total_river_outline_cpp_buffer, how="inner", predicate="within").index.tolist()
+        river_polys_idx = list(set(river_polys_idx))  # remove duplicates
+        idx_river[i][river_polys_idx] = True
+
+    time_pre = time.time()
+    print(f'Identify river polygons for OCSMesh : preliminary screening took {time.time()-time_OCSMesh_start} seconds.')
+    
+    # when the results from the two buffers don't agree, a more precise criterion (which can be slow) is used
+    # on the questionable candidates, which are much less than the total number of candidates
+    questionable_idx = (idx_river[0].astype(int) + idx_river[1].astype(int) == 1)  # the candidates that are not within the stricter buffer but within the looser buffer
+    if sum(questionable_idx) > 0:  # at least one questionable candidate
+        questionable_ids = np.argwhere(questionable_idx).ravel()
+        questionable_polys = gpd.GeoDataFrame(crs=cpp_crs, geometry=total_polys_cpp.loc[questionable_idx, 'geometry'])
+        # find intersection area between each questionable polygon and all river outline polygons
+        questionable_intersection = sjoin(questionable_polys, total_river_outline_cpp, how="inner", predicate="intersects")
+        intersection_area = questionable_intersection.apply(
+            lambda row: row['geometry'].intersection(total_river_outline_cpp.to_crs(cpp_crs).loc[row['index_right'], 'geometry']).area, axis=1)
+
+        # combine same index rows, which result from overlaps between a same polygon and multiple river outline polygons
+        intersection_area = intersection_area.groupby(intersection_area.index).sum().sort_index()
+        # compare the intersection area with the area of the questionable polygon itself
+        questionable_poly_area = questionable_polys['geometry'].area
+        questionable_poly_area = questionable_poly_area.groupby(questionable_poly_area.index).sum().sort_index()
+        if not np.array_equal(questionable_poly_area.index, intersection_area.index):
+            print('Warning: index mismatch for questionable_poly_area and intersection_area, keeping the common indices only')
+            common_idx = np.intersect1d(questionable_poly_area.index, intersection_area.index)
+            questionable_poly_area = questionable_poly_area.loc[common_idx]
+            intersection_area = intersection_area.loc[common_idx]
+
+        # include river polygons that are largely inside the river outline
+        questionable_valid = intersection_area > 0.7 * questionable_poly_area
+        questionable_valid_ids = questionable_poly_area.index[questionable_valid]
+        # add additional valid ids identified with the more precise method to those identified by the stricter criterion
+        idx_river[0][questionable_valid_ids] = True
+
+    print(f'Identify river polygons for OCSMesh : secondary screening took {time.time()-time_pre} seconds.')
+
+    # assemble the final river polygons
+    river_polys = gpd.GeoDataFrame(crs=cpp_crs, geometry=total_polys_cpp.loc[idx_river[0], 'geometry'])
+
+    # write the actual river polygons to file
+    drop_columns=[col for col in river_polys.columns if col not in ['geometry', 'FID']]
+    river_polys = river_polys.drop(drop_columns, axis=1)
+    river_polys = river_polys.drop_duplicates(subset=['geometry']).reset_index(drop=True).to_crs('epsg:4326')
+    river_polys.to_file(filename=f'{output_dir}/total_river_polys.shp', driver="ESRI Shapefile")
+
+    print(f'Preparing OCSMesh products took: {time.time()-time_OCSMesh_start} seconds.')
+
 def generate_river_outline_polys(river_arcs=None):
     river_outline_polygons = []
     river_polygons = [None] * river_arcs.shape[0]
@@ -1058,53 +1140,6 @@ def generate_river_outline_polys(river_arcs=None):
             river_outline_polygons += river_polygon
 
     return river_outline_polygons
-
-def clean_arcs0(LineStringList, blast_center, blast_radius, minimum_arc_length=10):
-    '''
-    Early version of clean_arcs, deprecated.
-    '''
-    uu = gpd.GeoDataFrame({'index': range(len(LineStringList)),'geometry': LineStringList}).geometry.unary_union
-
-    # # sample
-    # uu = GeoSeries(uu).set_crs('epsg:4326')
-    # uu_meter = uu.to_crs('esri:102008')
-
-    # ls1 = LineString([(0,0), (1,1)])
-    # ls2 = LineString([(0,1), (1,0)])
-    # inter = ls1.intersection(ls2)
-    # gc = split_line_by_point(ls1, MultiPoint([inter, Point(0.25, 0.25)]))
-
-    uu_xy = np.empty((0, 2), dtype=float)
-    uu_xy_idx = np.empty((0, 2), dtype=int)
-    idx = 0
-    for i, line in enumerate(uu.geoms):
-        uu_xy = np.r_[uu_xy, np.array(line.xy).T]
-        uu_xy_idx = np.r_[uu_xy_idx, np.c_[idx, idx+len(line.xy[0])]]
-        idx += len(line.xy[0])
-
-    i_snap = np.zeros((len(uu_xy), ), dtype=bool)
-    for center, radius in zip(blast_center, blast_radius):
-        idx = abs(uu_xy[:, 0]+1j*uu_xy[:, 1] - (center[0]+1j*center[1])) < radius
-        i_snap[idx] = True
-
-    _, idx = nearest_neighbour(uu_xy[i_snap], np.c_[blast_center[:, 0], blast_center[:, 1]])
-    uu_xy[i_snap, :] = blast_center[idx, :]
-
-    LineStringList_Cleaned = []
-    for i, line in enumerate(uu.geoms):
-        line_xy = uu_xy[uu_xy_idx[i, 0]:uu_xy_idx[i, 1], :]
-        LineStringList_Cleaned.append(LineString(np.c_[line_xy[:, 0], line_xy[:, 1]]))
-
-    river_arcs_gdf = gpd.GeoDataFrame({'index':range(len(LineStringList_Cleaned)),'geometry':LineStringList_Cleaned})
-    uu = river_arcs_gdf.geometry.unary_union
-
-    cleaned_arc_list = []
-    for i, line in enumerate(uu.geoms):
-        line = LineString(np.array(line.xy).T)
-        if line.length > dl_cpp2lonlat(minimum_arc_length, line.xy[1][0]):
-            cleaned_arc_list.append(line)
-
-    return cleaned_arc_list
 
 def improve_thalwegs(S_list, dl, line, search_length, perp, mpi_print_prefix, elev_scale=1.0):
     i_corrected = False
@@ -1207,11 +1242,10 @@ def make_river_map(
         elev_scale = 1.0,
         outer_arcs_positions = (), R_coef=0.4, length_width_ratio = 6.0,
         along_channel_reso_thres = (5, 300),
-        i_blast_intersection = False, blast_radius_scale = 0.5, bomb_radius_coef = 0.3,
         i_real_clean = True, projection_for_cleaning = cpp_crs,
-        snap_point_reso_ratio = 0.3, snap_arc_reso_ratio = 0.2,
+        snap_point_reso_ratio = 0.3, snap_arc_reso_ratio = 0.3,
         i_close_poly = True, i_smooth_banks = True,
-        output_prefix = '', mpi_print_prefix = '', i_OCSMesh = False, i_DiagnosticOutput = False,
+        output_prefix = '', mpi_print_prefix = '', i_OCSMesh = True, i_DiagnosticOutput = False,
         i_pseudo_channel = 2, pseudo_channel_width = 18, nrow_pseudo_channel = 4,
     ):
     '''
@@ -1234,9 +1268,6 @@ def make_river_map(
     | R_coef | float | coef controlling the along-channel resolutions at river bends (with a radius of R), a larger number leads to coarser resolutions (R*R_coef) |
     | length_width_ratio | float |  a ratio of element length in the along-channel direction to river width; when a river is narrower than the lower limit, the bank will be nudged (see next parameter) to widen the river |
     | i_close_poly | bool | whether to add cross-channel arcs to enclose river arcs into a polygon |
-    | i_blast_intersection | bool | whether to replace intersecting arcs (often noisy) at river intersections with scatter points (cleaner) |
-    | blast_radius_scale | float | coefficient controlling the blast radius at intersections, a larger number leads to more intersection features being deleted |
-    | bomb_radius_coef | float | coefficient controlling the spacing among intersection joints, a larger number leads to sparser intersection joints |
     | i_real_clean | bool | further clean intersecting river arcs |
     | projection_for_cleaning | string | a projected coordinate system for cleaning intersecting river arcs, specify one that is suitable for the area of interest |
     | snap_point_reso_ratio | float | scaling the threshold of the point snapping; a negtive number means absolute distance value |
@@ -1253,6 +1284,11 @@ def make_river_map(
     - total_arcs.map: an SMS map file containing all the river arcs, same as total_arcs.shp besides the format
     - other diagnostic outputs (if i_DiagnosticsOutput is True) and additional outputs (if i_OCSMesh is True)
     '''
+
+    # deprecated inputs
+    i_blast_intersection = False
+    blast_radius_scale = 0.5
+    bomb_radius_coef = 0.3
 
     # ------------------------- other input parameters not exposed to user ---------------------------
     nudge_ratio = np.array((0.3, 2.0))  # ratio between nudging distance to mean half-channel-width
@@ -1433,9 +1469,11 @@ def make_river_map(
     # thalwegs_cc_reso = [None] * len(thalwegs)
     final_thalwegs = [None] * len(thalwegs)
     real_bank_width = np.zeros((len(thalwegs), 2), dtype=float)  # [, 0] is head, [, 1] is tail
-    bombed_points = np.empty((0, 3), dtype=float)  # left bank and right bank for each thalweg
-    bombs = [None]* len(thalwegs) *2 # left bank and right bank for each thalweg
-    bomb_polygons = []
+
+    if i_blast_intersection:
+        bombed_points = np.empty((0, 3), dtype=float)  # left bank and right bank for each thalweg
+        bombs = [None]* len(thalwegs) *2 # left bank and right bank for each thalweg
+        bomb_polygons = []
 
     # enumerate each thalweg
     dummy_arcs = []
@@ -1583,7 +1621,7 @@ def make_river_map(
             # which is deprecated because the "i_real_clean" option without blasting is more robust
             # , so this loop is no longer needed and valid_points should always be True.
             # However, the loop is kept here for backward compatibility for now.
-            # TODO: remove this loop in the future, or make it optional when i_blash_intersection is True
+            # TODO: remove this loop in the future, or make it optional when i_blast_intersection is True
 
             # ------------------------- assemble river arcs ---------------------------
             arc_position = np.r_[-outer_arcs_positions, arc_position, 1.0+outer_arcs_positions].reshape(-1, 1)
@@ -1592,22 +1630,22 @@ def make_river_map(
 
             z_centerline = width/(this_nrow_arcs-1)  # record cross-channel (cc) resolution at each thalweg point
 
-            # determine blast radius based on mean channel width at an intersection
-            for k in [0, -1]:  # head and tail
-                dist = thalweg_endpoints[:, :] - thalweg[k, :]
-                # keep the index of self to facilitate the calculation of the blast_radius, which is based on the widths of all intersecting rivers
-                thalwegs_neighbors[i, k] = np.argwhere(dist[:, 0]**2 + dist[:, 1]**2 < 200**2)
-                if len(thalwegs_neighbors[i, k]) > 1:  # at least two rivers, i.e., at least one neighbor (except self)
-                    blast_radius[i, k] = blast_radius_scale * np.mean(thalweg_endpoints_width[thalwegs_neighbors[i, k]])
-                    blast_center[i, k] = (x_banks_left[k]+x_banks_right[k])/2 + 1j*(y_banks_left[k]+y_banks_right[k])/2
+            if i_blast_intersection:  # bomb intersections
+                # determine blast radius based on mean channel width at an intersection
+                for k in [0, -1]:  # head and tail
+                    dist = thalweg_endpoints[:, :] - thalweg[k, :]
+                    # keep the index of self to facilitate the calculation of the blast_radius, which is based on the widths of all intersecting rivers
+                    thalwegs_neighbors[i, k] = np.argwhere(dist[:, 0]**2 + dist[:, 1]**2 < 200**2)
+                    if len(thalwegs_neighbors[i, k]) > 1:  # at least two rivers, i.e., at least one neighbor (except self)
+                        blast_radius[i, k] = blast_radius_scale * np.mean(thalweg_endpoints_width[thalwegs_neighbors[i, k]])
+                        blast_center[i, k] = (x_banks_left[k]+x_banks_right[k])/2 + 1j*(y_banks_left[k]+y_banks_right[k])/2
 
-            # bomb intersections
-            valid_l, valid_l_headtail = bomb_line(np.c_[x_banks_left, y_banks_left], blast_radius[i, :])
-            valid_r, valid_r_headtail = bomb_line(np.c_[x_banks_right, y_banks_right], blast_radius[i, :])
-            valid_points = valid_l * valid_r
-            valid_points_headtail = valid_l_headtail * valid_r_headtail
+                valid_l, valid_l_headtail = bomb_line(np.c_[x_banks_left, y_banks_left], blast_radius[i, :])
+                valid_r, valid_r_headtail = bomb_line(np.c_[x_banks_right, y_banks_right], blast_radius[i, :])
+                valid_points = valid_l * valid_r
+                valid_points_headtail = valid_l_headtail * valid_r_headtail
+                bombed_idx = ~valid_points
 
-            bombed_idx = ~valid_points
             if not i_blast_intersection:
                 valid_points[:] = True
 
@@ -1635,6 +1673,7 @@ def make_river_map(
                     get_fake_banks(thalweg, const_bank_width=pseudo_channel_width)
                 this_nrow_arcs = nrow_pseudo_channel
                 arc_position = set_inner_arc_position(nrow_arcs=nrow_pseudo_channel, type='fake')
+                z_centerline = pseudo_channel_width/(this_nrow_arcs-1)  # update cross-channel (cc) resolution at each thalweg point
                 quality_controlled = True  # Case 4: real river, banks found in the previous step but with bad quality, falling back to pseudo channel
                 # still need to run the first half of the loop to assemble everything, so don't break here
             else:
@@ -1644,14 +1683,16 @@ def make_river_map(
         # end quality check and assemble loop
 
         if quality_controlled:
-            # save centerlines
             # assemble inner arcs
-            bombs_xyz = [np.empty((0,3), dtype=float)] * 2
+            if i_blast_intersection:
+                bombs_xyz = [np.empty((0,3), dtype=float)] * 2
+
             for k, [x_river_arc, y_river_arc] in enumerate(zip(x_river_arcs, y_river_arcs)):
                 line = np.c_[x_river_arc, y_river_arc]
                 if sum(valid_points) > 0:
                     n_valid_points = sum(valid_points)
-                    # snap vertices too close to each other
+
+                    # snap vertices too close to each other; probably not necessary
                     line[valid_points, :] = snap_vertices(line[valid_points, :], width[valid_points] * 0.3)  # optional: thalweg_resolution*0.75
 
                     # ----------Save-------
@@ -1669,10 +1710,12 @@ def make_river_map(
                     ]
                     z_encoded = z_encoder(z_info)
                     river_arcs_extra[i, k] = SMS_ARC(points=np.c_[line[valid_points, 0], line[valid_points, 1], z_encoded], src_prj='cpp', proj_z=False)
-                    # save bombed points
-                    bombed_points = np.r_[bombed_points, np.c_[line[bombed_idx, 0], line[bombed_idx, 1], width[bombed_idx]/(this_nrow_arcs-1)]]
 
-                # save centerline
+                    if i_blast_intersection:
+                        # save bombed points
+                        bombed_points = np.r_[bombed_points, np.c_[line[bombed_idx, 0], line[bombed_idx, 1], width[bombed_idx]/(this_nrow_arcs-1)]]
+
+                # save centerlines
                 if len(x_river_arcs) % 2 == 1:  # odd number of arcs
                     k = int((len(x_river_arcs)-1)/2)
                     line = np.c_[x_river_arcs[k], y_river_arcs[k]]
@@ -1683,16 +1726,18 @@ def make_river_map(
                 centerlines[i] = SMS_ARC(points=np.c_[line[valid_points, 0], line[valid_points, 1], z_centerline[valid_points]], src_prj='cpp')
 
                 # test bombs
-                for l in [0, 1]:
-                    if sum(~valid_points_headtail[:, l]) > 0:
-                        bombs_xyz[l] = np.r_[bombs_xyz[l], np.c_[line[~valid_points_headtail[:, l]][:, :2], width[~valid_points_headtail[:, l]]/(this_nrow_arcs)]]
+                if i_blast_intersection:
+                    for l in [0, 1]:
+                        if sum(~valid_points_headtail[:, l]) > 0:
+                            bombs_xyz[l] = np.r_[bombs_xyz[l], np.c_[line[~valid_points_headtail[:, l]][:, :2], width[~valid_points_headtail[:, l]]/(this_nrow_arcs)]]
 
-            for l in [0, 1]:
-                if len(bombs_xyz[l]) > 0:
-                    lon, lat = cpp2lonlat(bombs_xyz[l][:, 0], bombs_xyz[l][:, 1])
-                    dl_lonlat = dl_cpp2lonlat(bombs_xyz[l][:, 2], lat0=lat)
-                    # dl_cpp = dl_lonlat2cpp(dl_lonlat, lat0=lat)
-                    bombs[2*i+l] = Bombs(xyz=np.c_[lon, lat, dl_lonlat], crs='epsg:4326')
+            if i_blast_intersection:
+                for l in [0, 1]:
+                    if len(bombs_xyz[l]) > 0:
+                        lon, lat = cpp2lonlat(bombs_xyz[l][:, 0], bombs_xyz[l][:, 1])
+                        dl_lonlat = dl_cpp2lonlat(bombs_xyz[l][:, 2], lat0=lat)
+                        # dl_cpp = dl_lonlat2cpp(dl_lonlat, lat0=lat)
+                        bombs[2*i+l] = Bombs(xyz=np.c_[lon, lat, dl_lonlat], crs='epsg:4326')
 
             if sum(valid_points) > 0:
                 # assemble cross-channel arcs
@@ -1714,7 +1759,8 @@ def make_river_map(
             if i_pseudo_channel != 1:  # skip the following outputs if it is a pseudo channel
                 SMS_MAP(arcs=bank_arcs_raw.reshape((-1, 1))).writer(filename=f'{output_dir}/{output_prefix}bank_raw.map')
                 SMS_MAP(arcs=cc_arcs.reshape((-1, 1))).writer(filename=f'{output_dir}/{output_prefix}cc_arcs.map')
-                SMS_MAP(detached_nodes=bombed_points).writer(filename=f'{output_dir}/{output_prefix}relax_points.map')
+                if i_blast_intersection:
+                    SMS_MAP(detached_nodes=bombed_points).writer(filename=f'{output_dir}/{output_prefix}relax_points.map')
                 SMS_MAP(arcs=smoothed_thalwegs).writer(filename=f'{output_dir}/{output_prefix}smoothed_thalweg.map')
                 SMS_MAP(arcs=redistributed_thalwegs_pre_correction).writer(filename=f'{output_dir}/{output_prefix}redist_thalweg_pre_correction.map')
                 SMS_MAP(arcs=redistributed_thalwegs_after_correction).writer(filename=f'{output_dir}/{output_prefix}redist_thalweg_after_correction.map')
@@ -1724,28 +1770,31 @@ def make_river_map(
 
     del smoothed_thalwegs[:], redistributed_thalwegs_pre_correction[:]
     del redistributed_thalwegs_after_correction[:], corrected_thalwegs[:]
-    del bank_arcs, bank_arcs_raw, bombed_points, smoothed_thalwegs,
+    del bank_arcs, bank_arcs_raw, smoothed_thalwegs
+    if i_blast_intersection:
+        del bombed_points 
     del redistributed_thalwegs_pre_correction, redistributed_thalwegs_after_correction, corrected_thalwegs
 
     # ------------------------- Clean up and finalize ---------------------------
-    for i, thalweg_neighbors in enumerate(thalwegs_neighbors):
-        for j, neibs in enumerate(thalweg_neighbors):  # head and tail
-            if bombs[2*i+j] is not None:
-                for nei in neibs:
-                    nei = int(nei)
-                    if (2*i+j) != nei:
-                        bombs[2*i+j] += bombs[nei]
-                        bombs[nei] = None
+    if i_blast_intersection:
+        for i, thalweg_neighbors in enumerate(thalwegs_neighbors):
+            for j, neibs in enumerate(thalweg_neighbors):  # head and tail
+                if bombs[2*i+j] is not None:
+                    for nei in neibs:
+                        nei = int(nei)
+                        if (2*i+j) != nei:
+                            bombs[2*i+j] += bombs[nei]
+                            bombs[nei] = None
 
-    # gather bomb info
-    bombed_xyz = np.empty((0,3), dtype=float)
-    bomb_polygons = []
-    for i, bomb in enumerate(bombs):
-        if bomb is not None:
-            bomb_polygons.append(bomb.get_convex_hull())  # make convex hull before cleaning to include more space
-            bomb.clean(bomb_radius_coef=bomb_radius_coef)
-            xyz = np.c_[bomb.points.real, bomb.points.imag, bomb.res]
-            bombed_xyz = np.r_[bombed_xyz, xyz]
+        # gather bomb info
+        bombed_xyz = np.empty((0,3), dtype=float)
+        bomb_polygons = []
+        for i, bomb in enumerate(bombs):
+            if bomb is not None:
+                bomb_polygons.append(bomb.get_convex_hull())  # make convex hull before cleaning to include more space
+                bomb.clean(bomb_radius_coef=bomb_radius_coef)
+                xyz = np.c_[bomb.points.real, bomb.points.imag, bomb.res]
+                bombed_xyz = np.r_[bombed_xyz, xyz]
 
     # assemble arcs groups for cleaning
     arc_groups = [arc for river in river_arcs for arc in river if arc is not None]  # river arcs are always included
@@ -1758,14 +1807,6 @@ def make_river_map(
     total_arcs_cleaned = [LineString(arc.points[:, :]) for arc in arc_groups if arc is not None]
 
     if len(total_arcs_cleaned) > 0:
-        # if output_prefix == '':  # clean river intersections if in serial mode
-        #     total_arcs_cleaned = clean_intersections(
-        #         arcs=total_arcs_cleaned, target_polygons=bomb_polygons,
-        #         snap_points=bombed_xyz, i_OCSMesh=i_OCSMesh,
-        #         projected_crs=projection_for_cleaning
-        #     )
-        # else:  # if in parallel mode, defer river intersections until merging is complete
-        #     pass
         total_arcs_cleaned = clean_arcs(
             arcs=total_arcs_cleaned, i_real_clean=i_real_clean,
             snap_point_reso_ratio=snap_point_reso_ratio, snap_arc_reso_ratio=snap_arc_reso_ratio
@@ -1785,46 +1826,52 @@ def make_river_map(
         SMS_MAP(arcs=bank_arcs_final.reshape((-1, 1))).writer(filename=f'{output_dir}/{output_prefix}bank_final.map')
         del bank_arcs_final
 
-        if len(bomb_polygons) > 0:
-            gpd.GeoDataFrame(
-                index=range(len(bomb_polygons)), crs='epsg:4326', geometry=bomb_polygons
-            ).to_file(filename=f'{output_dir}/{output_prefix}bomb_polygons.shp', driver="ESRI Shapefile")
-        else:
-            print(f'{mpi_print_prefix} Warning: bomb_polygons empty')
-        del bomb_polygons[:]; del bomb_polygons
-
         if len(total_arcs_cleaned) > 0:
+            # SMS format
             SMS_MAP(arcs=geos2SmsArcList(geoms=total_arcs_cleaned)).writer(filename=f'{output_dir}/{output_prefix}total_arcs.map')
-
-        # needed not only for bombing but also for cleaning too, so always write
-        if len(bombed_xyz) > 0:
-            SMS_MAP(detached_nodes=bombed_xyz).writer(f'{output_dir}/{output_prefix}total_intersection_joints.map')
-            gpd.GeoDataFrame(geometry=gpd.points_from_xy(bombed_xyz[:, 0], bombed_xyz[:, 1]), crs='epsg:4326').\
-                to_file(f'{output_dir}/{output_prefix}total_intersection_joints.shp', driver="ESRI Shapefile")
-        else:
-            print(f'{mpi_print_prefix} Warning: bombed_xyz empty, {output_prefix}total_intersection_joints.map not written')
-
-        total_arcs_cleaned_polys = [poly for poly in polygonize(gpd.GeoSeries(total_arcs_cleaned))]
-        if len(total_arcs_cleaned_polys) > 0:
+            # shapefile format
             gpd.GeoDataFrame(
-                index=range(len(total_arcs_cleaned_polys)), crs='epsg:4326', geometry=total_arcs_cleaned_polys
+                index=range(len(total_arcs_cleaned)), crs='epsg:4326', geometry=total_arcs_cleaned
             ).to_file(filename=f'{output_dir}/{output_prefix}total_arcs.shp', driver="ESRI Shapefile")
-        else:
-            print(f'{mpi_print_prefix} Warning: total_arcs empty')
-        del total_arcs_cleaned_polys[:]; del total_arcs_cleaned_polys
 
         if i_OCSMesh:
-            cleaned_river_arcs = clean_river_arcs_for_ocsmesh(river_arcs=river_arcs, total_arcs=total_arcs_cleaned)
+            # cleaned_river_arcs = clean_river_arcs_for_ocsmesh(river_arcs=river_arcs, total_arcs=total_arcs_cleaned)
+            # del river_arcs
+            # total_river_outline_polys = generate_river_outline_polys(river_arcs=cleaned_river_arcs)
+            # del cleaned_river_arcs
+            total_river_outline_polys = generate_river_outline_polys(river_arcs=river_arcs)
             del river_arcs
-            total_river_outline_polys = generate_river_outline_polys(river_arcs=cleaned_river_arcs)
-            del cleaned_river_arcs
+
             if len(total_river_outline_polys) > 0:
                 gpd.GeoDataFrame(
                     index=range(len(total_river_outline_polys)), crs='epsg:4326', geometry=total_river_outline_polys
                 ).to_file(filename=f'{output_dir}/{output_prefix}river_outline.shp', driver="ESRI Shapefile")
             else:
                 print(f'{mpi_print_prefix} Warning: total_river_outline_polys empty')
+            
+            # output if in serial mode, otherwise, the output is handled by the mpi driver
+            if output_prefix == '':  # serial
+                output_OCSMesh(output_dir, 'total_arcs.shp', 'river_outline.shp')
+
             del total_river_outline_polys
+
+        if i_blast_intersection:
+            if len(bomb_polygons) > 0:
+                gpd.GeoDataFrame(
+                    index=range(len(bomb_polygons)), crs='epsg:4326', geometry=bomb_polygons
+                ).to_file(filename=f'{output_dir}/{output_prefix}bomb_polygons.shp', driver="ESRI Shapefile")
+            else:
+                print(f'{mpi_print_prefix} Warning: bomb_polygons empty')
+            del bomb_polygons[:]; del bomb_polygons
+
+            # needed not only for bombing but also for cleaning too, so always write
+            if len(bombed_xyz) > 0:
+                SMS_MAP(detached_nodes=bombed_xyz).writer(f'{output_dir}/{output_prefix}total_intersection_joints.map')
+                gpd.GeoDataFrame(geometry=gpd.points_from_xy(bombed_xyz[:, 0], bombed_xyz[:, 1]), crs='epsg:4326').\
+                    to_file(f'{output_dir}/{output_prefix}total_intersection_joints.shp', driver="ESRI Shapefile")
+            else:
+                print(f'{mpi_print_prefix} Warning: bombed_xyz empty, {output_prefix}total_intersection_joints.map not written')
+
     else:
         print(f'{mpi_print_prefix} Warning: total_sms_arcs_cleaned empty, skip writing to *.map')
 

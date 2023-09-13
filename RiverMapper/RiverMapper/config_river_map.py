@@ -31,11 +31,10 @@ class ConfigRiverMap():
         elev_scale = 1.0,
         outer_arcs_positions = (), R_coef=0.4, length_width_ratio = 6.0,
         along_channel_reso_thres = (5, 300),
-        i_blast_intersection = False, blast_radius_scale = 0.5, bomb_radius_coef = 0.3,
         i_real_clean = True, projection_for_cleaning = cpp_crs,
         i_close_poly = True, i_smooth_banks = True,
         snap_point_reso_ratio = 0.3, snap_arc_reso_ratio = 0.2,
-        output_prefix = '', mpi_print_prefix = '', i_OCSMesh = False, i_DiagnosticOutput = False,
+        output_prefix = '', mpi_print_prefix = '', i_OCSMesh = True, i_DiagnosticOutput = False,
         i_pseudo_channel = 2, pseudo_channel_width = 18, nrow_pseudo_channel = 4,
     ):
         # see a description of the parameters in the function make_river_map()
@@ -52,11 +51,8 @@ class ConfigRiverMap():
             'length_width_ratio': length_width_ratio,
             'along_channel_reso_thres': along_channel_reso_thres,
             'i_close_poly': i_close_poly,
-            'i_blast_intersection': i_blast_intersection,
             'i_real_clean': i_real_clean,
             'projection_for_cleaning': projection_for_cleaning,
-            'blast_radius_scale': blast_radius_scale,
-            'bomb_radius_coef': bomb_radius_coef,
             'snap_point_reso_ratio': snap_point_reso_ratio,
             'snap_arc_reso_ratio': snap_arc_reso_ratio,
             'i_smooth_banks': i_smooth_banks,
@@ -82,25 +78,6 @@ class ConfigRiverMap():
         The values of outer_arcs_positions are the relative posititions of the river width,
         '''
         return cls(outer_arcs_positions = (0.1, 0.2), i_real_clean = True)
-
-    @classmethod
-    def BombedIntersections(cls):
-        '''
-        Blast intersection arcs and insert feature points to pave river confluence.
-        Note that an additional output file "intersection_joints.map" will be generated;
-        this file contains the coordinates of the intersection points.
-        '''
-        return cls(i_blast_intersection = True, blast_radius_scale = 0.5, bomb_radius_coef = 0.3)
-
-    @classmethod
-    def FurtherCleanIntersections(cls):
-        '''
-        Compared to the default parameter settings, which only snap close-by points,
-        this option (i_real_clean = True) further cleans nearby arcs closer than
-        the threshold (snap_arc_reso_ratio * river width).
-        However, the efficiency still needs to be improved.
-        '''
-        return cls(blast_radius_scale = 0.0, i_real_clean = True)
 
     @classmethod
     def BarrierIsland(cls):
