@@ -2,6 +2,7 @@
 
 # DEM-based meshing aid for compound flooding 
 ![Watershed rivers](http://ccrm.vims.edu/yinglong/feiye/Public/RiverMapper_images/Intro.jpg)
+**_NOTE:_** This is not a mesh generator. It generates river arcs or polygons that can be fed to mesh generators.
 
 ## Installation 
 Python 3.9 or above is recommended
@@ -20,7 +21,7 @@ Use the command
 ```bash
 tar xvf RiverMapper_Samples.tar
 ```
-to extract files from the \*.tar file.
+to extract files from RiverMapper_Samples.tar.
 
 ## Tutorial
 See online documentation in the [SCHISM manual](https://schism-dev.github.io/schism/master/mesh-generation/meshing-for-compound-floods/generate-river-map.html) for more information.

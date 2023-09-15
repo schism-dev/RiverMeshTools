@@ -5,28 +5,31 @@ and finally calls the function "make_river_map" to sequentially process each gro
 
 Usage:
 Import and call the function "river_map_mpi_driver",
-see sample_parallel.py in the installation directory.
+see sample_parallel.py in the sample application:
+http://ccrm.vims.edu/yinglong/feiye/Public/RiverMapper_Samples.tar
 """
 
 
-import os
+# Standard Library Imports
 import time
-from mpi4py import MPI
 from glob import glob
-import numpy as np
 import pickle
 from pathlib import Path
+
+# Third-Party Imports
+from mpi4py import MPI
+import numpy as np
 import geopandas as gpd
+
+# Application-Specific Imports
 from RiverMapper.river_map_tif_preproc import find_thalweg_tile, Tif2XYZ
-from RiverMapper.make_river_map import make_river_map, clean_intersections, geos2SmsArcList, Geoms_XY, clean_arcs, output_OCSMesh
+from RiverMapper.make_river_map import make_river_map, geos2SmsArcList, clean_arcs, output_OCSMesh
 from RiverMapper.config_river_map import ConfigRiverMap
 from RiverMapper.SMS import merge_maps, SMS_MAP, get_all_points_from_shp
 from RiverMapper.util import silentremove
-import warnings
 
-warnings.filterwarnings("error", category=UserWarning)
-
-cpp_crs = "+proj=eqc +lat_ts=0 +lat_0=0 +lon_0=0 +x_0=0 +y_0=0 +ellps=WGS84 +datum=WGS84 +units=m +no_defs"
+# import warnings
+# warnings.filterwarnings("error", category=UserWarning)
 
 def my_mpi_idx(N, size, rank):
     '''
@@ -71,16 +74,9 @@ def merge_outputs(output_dir):
     if len(river_outline_files) > 0:
         gpd.pd.concat([gpd.read_file(x).to_crs('epsg:4326') for x in river_outline_files]).to_file(f'{output_dir}/total_river_outline.shp')
 
-    bomb_polygon_files = glob(f'{output_dir}/*_bomb_polygons.shp')
-    if len(bomb_polygon_files) > 0:
-        gpd.pd.concat([gpd.read_file(x).to_crs('epsg:4326') for x in bomb_polygon_files]).to_file(f'{output_dir}/total_bomb_polygons.shp')
-
     print(f'Merging outputs took: {time.time()-time_merge_start} seconds.')
     return [total_arcs_map, total_intersection_joints, total_river_arcs, total_centerlines, total_dummy_map]
 
-
-def final_clean_up(output_dir, total_arcs_map, snap_points, i_blast_intersection=False, total_river_arcs=None):
-    pass
 
 def river_map_mpi_driver(
     dems_json_file = './dems.json',  # files for all DEM tiles
@@ -261,24 +257,14 @@ def river_map_mpi_driver(
     # finalize
     if rank == 0:
         # merge outputs from all ranks
-        total_arcs_map, total_intersection_joints, total_river_arcs, total_centerlines, total_dummy_map = merge_outputs(output_dir)
+        total_arcs_map, _, _, _, _ = merge_outputs(output_dir)
 
         print(f'\n--------------- final clean-ups --------------------------------------------------------\n')
         time_final_cleanup_start = time.time()
 
-        total_arcs_cleaned = [arc for arc in total_arcs_map.to_GeoDataFrame().geometry.unary_union.geoms]
-        if False: # not river_map_config.optional['i_blast_intersection']:  # deprecated
-            if os.path.exists(f'{output_dir}/total_bomb_polygons.shp'):
-                bomb_polygons = gpd.read_file(f'{output_dir}/total_bomb_polygons.shp')
-            else:
-                bomb_polygons = None
-            total_arcs_cleaned = clean_intersections(
-                arcs=total_arcs_cleaned, target_polygons=bomb_polygons, snap_points=total_intersection_joints,
-                i_OCSMesh=river_map_config.optional['i_OCSMesh'],
-                idummy=river_map_config.optional['i_pseudo_channel']==1,
-            )
         total_arcs_cleaned = clean_arcs(
-            total_arcs_cleaned, i_real_clean=river_map_config.optional['i_real_clean'],
+            [arc for arc in total_arcs_map.to_GeoDataFrame().geometry.unary_union.geoms],
+            n_clean_iter=river_map_config.optional['n_clean_iter'],
             snap_point_reso_ratio=river_map_config.optional['snap_point_reso_ratio'],
             snap_arc_reso_ratio=river_map_config.optional['snap_arc_reso_ratio'],
         )

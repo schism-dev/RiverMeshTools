@@ -25,23 +25,60 @@ class ConfigRiverMap():
          **my_config.optional,
     )
     '''
+
+    # class constants defining the default values of the optional parameters,
+    # also used by make_river_map()
+    DEFAULT_i_DEM_cache = True
+    DEFAULT_selected_thalweg = None
+    DEFAULT_MapUnit2METER = 1
+    DEFAULT_river_threshold = (5, 400)
+    DEFAULT_min_arcs = 3
+    DEFAULT_elev_scale = 1.0
+    DEFAULT_outer_arcs_positions = ()
+    DEFAULT_R_coef=0.4
+    DEFAULT_length_width_ratio = 6.0
+    DEFAULT_along_channel_reso_thres = (5, 300)
+    DEFAULT_snap_point_reso_ratio = 0.3
+    DEFAULT_snap_arc_reso_ratio = 0.3
+    DEFAULT_n_clean_iter = 7
+    DEFAULT_i_close_poly = True
+    DEFAULT_i_smooth_banks = True
+    DEFAULT_output_prefix = ''
+    DEFAULT_mpi_print_prefix = ''
+    DEFAULT_i_OCSMesh = True
+    DEFAULT_i_DiagnosticOutput = False
+    DEFAULT_i_pseudo_channel = 2
+    DEFAULT_pseudo_channel_width = 18
+    DEFAULT_nrow_pseudo_channel = 4
+
     def __init__(self,
-        i_DEM_cache = True, selected_thalweg = None,
-        MapUnit2METER = 1, river_threshold = (5, 400), min_arcs = 3,
-        elev_scale = 1.0,
-        outer_arcs_positions = (), R_coef=0.4, length_width_ratio = 6.0,
-        along_channel_reso_thres = (5, 300),
-        i_real_clean = True, projection_for_cleaning = cpp_crs,
-        i_close_poly = True, i_smooth_banks = True,
-        snap_point_reso_ratio = 0.3, snap_arc_reso_ratio = 0.2,
-        output_prefix = '', mpi_print_prefix = '', i_OCSMesh = True, i_DiagnosticOutput = False,
-        i_pseudo_channel = 2, pseudo_channel_width = 18, nrow_pseudo_channel = 4,
+        i_DEM_cache = DEFAULT_i_DEM_cache,
+        selected_thalweg = DEFAULT_selected_thalweg,
+        MapUnit2METER = DEFAULT_MapUnit2METER,
+        river_threshold = DEFAULT_river_threshold,
+        min_arcs = DEFAULT_min_arcs,
+        elev_scale = DEFAULT_elev_scale,
+        outer_arcs_positions = DEFAULT_outer_arcs_positions,
+        R_coef= DEFAULT_R_coef,
+        length_width_ratio = DEFAULT_length_width_ratio,
+        along_channel_reso_thres = DEFAULT_along_channel_reso_thres,
+        snap_point_reso_ratio = DEFAULT_snap_point_reso_ratio,
+        snap_arc_reso_ratio = DEFAULT_snap_arc_reso_ratio,
+        n_clean_iter = DEFAULT_n_clean_iter,
+        i_close_poly = DEFAULT_i_close_poly,
+        i_smooth_banks = DEFAULT_i_smooth_banks,
+        output_prefix = DEFAULT_output_prefix,
+        mpi_print_prefix = DEFAULT_mpi_print_prefix,
+        i_OCSMesh = DEFAULT_i_OCSMesh,
+        i_DiagnosticOutput = DEFAULT_i_DiagnosticOutput,
+        i_pseudo_channel = DEFAULT_i_pseudo_channel,
+        pseudo_channel_width = DEFAULT_pseudo_channel_width,
+        nrow_pseudo_channel = DEFAULT_nrow_pseudo_channel,
     ):
         # see a description of the parameters in the function make_river_map()
         self.optional = {
+            'i_DEM_cache': i_DEM_cache,
             'selected_thalweg': selected_thalweg,
-            'output_prefix': output_prefix,
-            'mpi_print_prefix': mpi_print_prefix,
             'MapUnit2METER': MapUnit2METER,
             'river_threshold': river_threshold,
             'min_arcs': min_arcs,
@@ -50,13 +87,13 @@ class ConfigRiverMap():
             'R_coef': R_coef,
             'length_width_ratio': length_width_ratio,
             'along_channel_reso_thres': along_channel_reso_thres,
-            'i_close_poly': i_close_poly,
-            'i_real_clean': i_real_clean,
-            'projection_for_cleaning': projection_for_cleaning,
             'snap_point_reso_ratio': snap_point_reso_ratio,
             'snap_arc_reso_ratio': snap_arc_reso_ratio,
+            'n_clean_iter': n_clean_iter,
+            'i_close_poly': i_close_poly,
             'i_smooth_banks': i_smooth_banks,
-            'i_DEM_cache': i_DEM_cache,
+            'output_prefix': output_prefix,
+            'mpi_print_prefix': mpi_print_prefix,
             'i_OCSMesh': i_OCSMesh,
             'i_DiagnosticOutput': i_DiagnosticOutput,
             'i_pseudo_channel': i_pseudo_channel,
@@ -77,7 +114,7 @@ class ConfigRiverMap():
         and on both sides of the river.
         The values of outer_arcs_positions are the relative posititions of the river width,
         '''
-        return cls(outer_arcs_positions = (0.1, 0.2), i_real_clean = True)
+        return cls(outer_arcs_positions = (0.1, 0.2))
 
     @classmethod
     def BarrierIsland(cls):
@@ -87,15 +124,16 @@ class ConfigRiverMap():
         Explanation on the changes from the default settings:
         1. river_threshold: the default value is (5, 400), which is too small for barrier islands.
         2. elev_scale: the default value is 1.0; a value of -1.0 is used here to invert the DEM.
-        3. i_real_clean: the default value is False; a value of True is used here to further clean the river map.
-        4. R_coef: the default value is 0.4; a larger value is needed here to make the barrier map more smooth,
+        3. R_coef: the default value is 0.4; a larger value is needed here to make the barrier map more smooth,
               because capturing the curvature of barrier islands is not as important as the capturing barrier height.
-        5. length_width_ratio: the default value is 6.0; a larger value is used here to make the barrier map more smooth.
-        6. along_channel_reso_thres: the default value is (5, 300); a larger value is used here to fit a nicer
+        4. length_width_ratio: the default value is 6.0; a larger value is used here to make the barrier map more smooth.
+        5. along_channel_reso_thres: the default value is (5, 300); a larger value is used here to fit a nicer
               transition between the barrier and the ocean (which often have a resolution of 2000 m).
         '''
-        return cls(river_threshold=(5, 1000), elev_scale=-1.0, i_real_clean=True,
-                   R_coef=20, length_width_ratio=100, along_channel_reso_thres=(5, 1000))
+        return cls(
+            river_threshold=(5, 1000), elev_scale=-1.0, R_coef=20,
+            length_width_ratio=100, along_channel_reso_thres=(5, 1000)
+        )
 
     @classmethod
     def Levees(cls):
@@ -104,8 +142,10 @@ class ConfigRiverMap():
         to channels (in this case levees with two feet and a flat top)
         of a fixed width (in this case foot-to-foot width)
         '''
-        return cls(i_pseudo_channel = 1, pseudo_channel_width = 18,
-                   nrow_pseudo_channel = 4, length_width_ratio = 50.0,
-                   i_DiagnosticOutput = True, i_real_clean = True,
-                   snap_point_reso_ratio = -1e-5,  # negative value means abosolute value (lon/lat)
-                   i_smooth_banks = False, river_threshold = (18, 18), min_arcs = 4)
+        return cls(
+            i_pseudo_channel = 1, pseudo_channel_width = 18,
+            nrow_pseudo_channel = 4, length_width_ratio = 50.0,
+            snap_point_reso_ratio = 0.2, snap_arc_reso_ratio = 0.2,
+            i_smooth_banks = False, river_threshold = (18, 18), min_arcs = 4,
+            i_DiagnosticOutput = True,
+        )
