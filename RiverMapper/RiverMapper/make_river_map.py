@@ -511,11 +511,29 @@ def get_thalweg_neighbors(thalwegs, thalweg_endpoints):
 
     return thalweg_neighbors
 
-def width2narcs(width, min_arcs=3):
-    return int(min_arcs + np.floor(0.35*width**0.25))
+def width2narcs(width, min_arcs=3, opt='regular'):
+
+    if callable(opt):  # user-defined function
+        nrow = int(max(3, opt(width)))  # force at least 2 divisions (3 points) in the cross-section
+    elif opt == 'regular':
+        if width < 30:
+            nrow = min_arcs
+        else:
+            nrow = int(min_arcs + np.ceil(width / 500))  # add one arc for every increase of 500 m
+    elif opt == 'insensitive':
+        nrow = int(min_arcs + np.floor(0.35*width**0.25))  # add one arc for every increase of one order of magnitude
+        # similar to nrow = min_arcs + max(0, np.floor(log10(width)-1))
+    elif opt == 'sensitive':
+        nrow = int(min_arcs + np.ceil(width / 100))  # add one arc for every increase of 100 m
+    else:
+        raise ValueError(f'unknown width2narcs option: {opt}')
+
+    return nrow
 
 def set_inner_arc_position(nrow_arcs, type='regular'):
-    if type == 'regular':  # evenly spaced inner arcs
+    if callable(type):  # user-defined function
+        arc_position = type(nrow_arcs)
+    elif type == 'regular':  # evenly spaced inner arcs
         arc_position = np.linspace(0.0, 1.0, nrow_arcs)
     elif type == 'fake': # default levee
         arc_position = np.array([0.0, 6.75, 11.25, 18.0]) / 18
@@ -926,7 +944,7 @@ def clean_arcs(arcs, snap_point_reso_ratio, snap_arc_reso_ratio, n_clean_iter=5)
 
     print('cleaning all arcs iteratively ...')
 
-    progressive_ratio = (np.arange(1, n_clean_iter+1) / n_clean_iter) ** 4  # small steps at the beginning
+    progressive_ratio = (np.arange(1, n_clean_iter+1) / n_clean_iter) ** 2  # small steps at the beginning
     progressive_ratio = np.r_[progressive_ratio, np.ones(10)]
 
     for i, pratio in enumerate(progressive_ratio):
@@ -1171,6 +1189,7 @@ def make_river_map(
         selected_thalweg=ConfigRiverMap.DEFAULT_selected_thalweg,
         river_threshold=ConfigRiverMap.DEFAULT_river_threshold,
         min_arcs=ConfigRiverMap.DEFAULT_min_arcs,
+        width2narcs_option=ConfigRiverMap.DEFAULT_width2narcs_option,
         elev_scale=ConfigRiverMap.DEFAULT_elev_scale,
         outer_arcs_positions=ConfigRiverMap.DEFAULT_outer_arcs_positions,
         R_coef=ConfigRiverMap.DEFAULT_R_coef,
@@ -1203,6 +1222,7 @@ def make_river_map(
     | mpi_print_prefix | string | a prefix string to identify the calling mpi processe in the output messages; can be empty |
     | river_threshold | float | minimum and maximum river widths (in meters) to be resolved |
     | min_arcs | integer | minimum number of arcs to resolve a channel (including bank arcs, inner arcs and outer arcs) |
+    | width2narcs_option | string or callable | pre-defined options ('regular', 'sensitive', 'insensitve') or a user-defined callable for determining number of cross-section points based on river width |
     | elev_scale | float | scaling factor for elevations; a number of -1 (invert elevations) is useful for finding ridges (e.g., of a barrier island) |
     | outer_arc_positions | a tuple of floats | relative position of outer arcs, e.g., (0.1, 0.2) will add 2 outer arcs on each side of the river (4 in total), 0.1 \* riverwidth and 0.2 \* riverwidth from the banks. |
     | R_coef | float | coef controlling the along-channel resolutions at river bends (with a radius of R), a larger number leads to coarser resolutions (R*R_coef) |
@@ -1255,7 +1275,7 @@ def make_river_map(
             snap_arc_reso_ratio = min_snap_ratio
 
     # maximum number of arcs to resolve a channel (including bank arcs, inner arcs and outer arcs)
-    max_nrow_arcs = width2narcs(river_threshold[-1], min_arcs=min_arcs) + 2 * outer_arcs_positions.size
+    max_nrow_arcs = width2narcs(river_threshold[-1], min_arcs=min_arcs, opt=width2narcs_option) + 2 * outer_arcs_positions.size
     # refine toward endpoints to better fit intersections
     # ---------------------- end pre-processing some inputs -------------------------
 
@@ -1413,7 +1433,7 @@ def make_river_map(
         if i_pseudo_channel == 1:
             this_nrow_arcs = nrow_pseudo_channel
         else:
-            this_nrow_arcs = min(max_nrow_arcs, width2narcs(np.mean(width), min_arcs=min_arcs))
+            this_nrow_arcs = min(max_nrow_arcs, width2narcs(np.mean(width), min_arcs=min_arcs, opt=width2narcs_option))
 
         # Redistribute thalwegs vertices
         thalweg, thalweg_smooth, reso, retained_idx = redistribute_arc(
@@ -1463,7 +1483,7 @@ def make_river_map(
             corrected_thalwegs[i] = SMS_ARC(points=np.c_[thalweg[:, 0], thalweg[:, 1]], src_prj='cpp')
 
             # Redistribute thalwegs vertices
-            this_nrow_arcs = min(max_nrow_arcs, width2narcs(np.mean(width), min_arcs=min_arcs))
+            this_nrow_arcs = min(max_nrow_arcs, width2narcs(np.mean(width), min_arcs=min_arcs, opt=width2narcs_option))
             thalweg, thalweg_smooth, reso, retained_idx = redistribute_arc(
                 thalweg, thalweg_smooth[retained_idx], width, this_nrow_arcs,
                 R_coef=R_coef, length_width_ratio=length_width_ratio, reso_thres=along_channel_reso_thres,
@@ -1524,7 +1544,7 @@ def make_river_map(
                 # thalweg_resolutions[i] = np.c_[(thalweg[:-1, :]+thalweg[1:, :])/2, get_dist_increment(thalweg)]
 
                 # make inner arcs between two banks
-                this_nrow_arcs = min(max_nrow_arcs, width2narcs(np.mean(width), min_arcs=min_arcs))
+                this_nrow_arcs = min(max_nrow_arcs, width2narcs(np.mean(width), min_arcs=min_arcs, opt=width2narcs_option))
                 arc_position = set_inner_arc_position(nrow_arcs=this_nrow_arcs, type='regular')
             # end if degenerate case
         # end if pseudo channel or real river arcs

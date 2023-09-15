@@ -30,16 +30,17 @@ class ConfigRiverMap():
     # also used by make_river_map()
     DEFAULT_i_DEM_cache = True
     DEFAULT_selected_thalweg = None
-    DEFAULT_river_threshold = (5, 400)
+    DEFAULT_river_threshold = (5, 600)
     DEFAULT_min_arcs = 3
+    DEFAULT_width2narcs_option = 'regular'
     DEFAULT_elev_scale = 1.0
     DEFAULT_outer_arcs_positions = ()
     DEFAULT_R_coef=0.4
     DEFAULT_length_width_ratio = 6.0
     DEFAULT_along_channel_reso_thres = (5, 300)
     DEFAULT_snap_point_reso_ratio = 0.3
-    DEFAULT_snap_arc_reso_ratio = 0.3
-    DEFAULT_n_clean_iter = 7
+    DEFAULT_snap_arc_reso_ratio = 0.2
+    DEFAULT_n_clean_iter = 5
     DEFAULT_i_close_poly = True
     DEFAULT_i_smooth_banks = True
     DEFAULT_output_prefix = ''
@@ -55,6 +56,7 @@ class ConfigRiverMap():
         selected_thalweg = DEFAULT_selected_thalweg,
         river_threshold = DEFAULT_river_threshold,
         min_arcs = DEFAULT_min_arcs,
+        width2narcs_option = DEFAULT_width2narcs_option,
         elev_scale = DEFAULT_elev_scale,
         outer_arcs_positions = DEFAULT_outer_arcs_positions,
         R_coef= DEFAULT_R_coef,
@@ -146,3 +148,16 @@ class ConfigRiverMap():
             i_smooth_banks = False, river_threshold = (18, 18), min_arcs = 4,
             i_DiagnosticOutput = True,
         )
+    
+    @classmethod
+    def STOFS_3D_Atlantic(cls):
+        '''
+        Settings for the STOFS 3D Atlantic domain
+        '''
+        return cls(
+            length_width_ratio = 20.0,
+            river_threshold = (5, 400),
+            width2narcs_option = 'insensitive',
+            i_DiagnosticOutput = True,
+        )
+
