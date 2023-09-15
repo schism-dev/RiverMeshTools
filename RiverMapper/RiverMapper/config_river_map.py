@@ -30,7 +30,6 @@ class ConfigRiverMap():
     # also used by make_river_map()
     DEFAULT_i_DEM_cache = True
     DEFAULT_selected_thalweg = None
-    DEFAULT_MapUnit2METER = 1
     DEFAULT_river_threshold = (5, 400)
     DEFAULT_min_arcs = 3
     DEFAULT_elev_scale = 1.0
@@ -54,7 +53,6 @@ class ConfigRiverMap():
     def __init__(self,
         i_DEM_cache = DEFAULT_i_DEM_cache,
         selected_thalweg = DEFAULT_selected_thalweg,
-        MapUnit2METER = DEFAULT_MapUnit2METER,
         river_threshold = DEFAULT_river_threshold,
         min_arcs = DEFAULT_min_arcs,
         elev_scale = DEFAULT_elev_scale,
@@ -79,7 +77,6 @@ class ConfigRiverMap():
         self.optional = {
             'i_DEM_cache': i_DEM_cache,
             'selected_thalweg': selected_thalweg,
-            'MapUnit2METER': MapUnit2METER,
             'river_threshold': river_threshold,
             'min_arcs': min_arcs,
             'elev_scale': elev_scale,
