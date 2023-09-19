@@ -83,12 +83,12 @@ class dem(object):
         #add nodata bnd
         sind00=nonzero(self.dem.ravel()==self.info.nodata)[0]
         if len(sind00)!=0:
-            ns=min(int(1e6),sind00.size); nsub=int(sind00.size/ns); sindn=[];
-            for i in arange(nsub):
+            ns=min([int(1e6),sind00.size]); nsub=int(sind00.size/ns); sindn=[];
+            for i in np.arange(nsub):
                 if i==(nsub-1):
-                    sind0=sind00[arange(i*ns,sind00.size)]
+                    sind0=sind00[np.arange(i*ns,sind00.size)]
                 else:
-                    sind0=sind00[arange(i*ns,(i+1)*ns)]
+                    sind0=sind00[np.arange(i*ns,(i+1)*ns)]
                 #get all neighbors
                 iy0,ix0=unravel_index(sind0,self.info.ds)
                 yind=r_[iy0,  iy0-1, iy0,  iy0+1, iy0-1,iy0-1, iy0+1, iy0+1]
@@ -128,7 +128,7 @@ class dem(object):
 
         #colloect data and also bnd dir and dem
         sind_bnd_local=[]; dem_bnd_local=[]; dir_bnd_local=[]; sind_bnd_nodata=[]
-        for i in arange(self.info.nsubdomain):
+        for i in np.arange(self.info.nsubdomain):
             iy,ix=self.domains[i].info.ixy_global; ym,xm=self.domains[i].info.ds
             eind=[iy,iy+ym,ix,ix+xm]
             exec('self.{}[{}:{},{}:{}]=self.domains[{}].{}'.format(outname,*eind,i,name))
@@ -184,8 +184,8 @@ class dem(object):
         self.info.ixy_global=[iy0+iy,ix0+ix]
 
         #local boundary index
-        biy=r_[zeros(xm),ones(xm)*(ym-1),arange(1,ym-1),arange(1,ym-1)].astype('int')
-        bix=r_[arange(xm),arange(xm),zeros(ym-2),ones(ym-2)*(xm-1)].astype('int')
+        biy=r_[np.zeros(xm),np.ones(xm)*(ym-1),np.arange(1,ym-1),np.arange(1,ym-1)].astype('int')
+        bix=r_[np.arange(xm),np.arange(xm),np.zeros(ym-2),np.ones(ym-2)*(xm-1)].astype('int')
         sind_bnd=ravel_multi_index([biy,bix],self.info.ds)
         if hasattr(self,'dem'): dem_bnd=self.dem.ravel()[sind_bnd].copy()
         if hasattr(self,'dir'): dir_bnd=self.dir.ravel()[sind_bnd].copy()
@@ -274,7 +274,7 @@ class dem(object):
         self.info.nodata=nodata
         self.info.ds=[ym,xm];
         self.info.skiprows=int(6+skiprows)
-        self.info.usecols=arange(xm).astype('int')+int(skipcols)
+        self.info.usecols=np.arange(xm).astype('int')+int(skipcols)
         self.info.max_rows=int(ym)
         self.info.depth_limit=depth_limit
 
@@ -291,13 +291,13 @@ class dem(object):
         self.domains=[]
 
         #boundary
-        biy=r_[zeros(xm),ones(xm)*(ym-1),arange(1,ym-1),arange(1,ym-1)].astype('int')
-        bix=r_[arange(xm),arange(xm),zeros(ym-2),ones(ym-2)*(xm-1)].astype('int')
+        biy=np.r_[np.zeros(xm),np.ones(xm)*(ym-1),np.arange(1,ym-1),np.arange(1,ym-1)].astype('int')
+        bix=np.r_[np.arange(xm),np.arange(xm),np.zeros(ym-2),np.ones(ym-2)*(xm-1)].astype('int')
         self.info.sind_bnd=ravel_multi_index([biy,bix],self.info.ds)
         self.info.sind_bnd_nodata=array([]).astype('int')
 
         #calcuate subdomain info
-        for i in arange(ny):
+        for i in np.arange(ny):
             #subdomain index
             if ny==1:
                 iy=0; dy=dy0; eiy=0; edy=dy0 #eiy,edy is local index and shape
@@ -309,7 +309,7 @@ class dem(object):
                 else:
                     iy=i*dy0-offset;  dy=dy0+2*offset;   eiy=offset; edy=dy0
 
-            for k in arange(nx):
+            for k in np.arange(nx):
                 #subdomain index
                 if nx==1:
                     ix=0;  dx=dx0;  eix=0; edx=dx0 #eiy,edy is local index and shape
@@ -329,7 +329,7 @@ class dem(object):
                 sinfo.nodata=nodata
                 sinfo.ds=[dy,dx]
                 sinfo.skiprows=int(6+iy+skiprows)
-                sinfo.usecols=arange(ix,ix+dx).astype('int')+int(skipcols)
+                sinfo.usecols=np.arange(ix,ix+dx).astype('int')+int(skipcols)
                 sinfo.max_rows=int(dy)
                 sinfo.depth_limit=depth_limit
 
@@ -341,8 +341,8 @@ class dem(object):
                 sinfo.ds_global=[ym,xm]
 
                 #local boundary index
-                biy=r_[zeros(dx),ones(dx)*(dy-1),arange(1,dy-1),arange(1,dy-1)].astype('int')
-                bix=r_[arange(dx),arange(dx),zeros(dy-2),ones(dy-2)*(dx-1)].astype('int')
+                biy=r_[np.zeros(dx),np.ones(dx)*(dy-1),np.arange(1,dy-1),np.arange(1,dy-1)].astype('int')
+                bix=r_[np.arange(dx),np.arange(dx),np.zeros(dy-2),np.ones(dy-2)*(dx-1)].astype('int')
                 sinfo.sind_bnd=ravel_multi_index([biy,bix],sinfo.ds)
                 sinfo.sind_bnd_nodata=array([]).astype('int')
 
@@ -417,13 +417,13 @@ class dem(object):
 
             #find neighboring domains
             nbs=[]; slims=[]
-            for i in arange(nfile):
+            for i in np.arange(nfile):
                 x1,x2,y1,y2,dxy=diminfo0[i][:5]
 
                 #neighboring domain
                 nb=[]
                 cdxy=1.5*dxy; cx1=x1-cdxy; cx2=x2+cdxy; cy1=y1-cdxy; cy2=y2+cdxy
-                for m in arange(nfile):
+                for m in np.arange(nfile):
                     if m==i: continue
                     sx1,sx2,sy1,sy2=diminfo0[m][:4]
 
@@ -444,10 +444,10 @@ class dem(object):
                 #****************************************************************************
                 snb=[None,None,None,None]
                 xc=[x1,x2,x2,x1]; yc=[y1,y1,y2,y2]
-                for m in arange(len(nb)):
+                for m in np.arange(len(nb)):
                     if int(ids[i])>int(ids[nb[m]]): continue
                     sx1,sx2,sy1,sy2=diminfo0[nb[m]][:4]
-                    for k in arange(4):
+                    for k in np.arange(4):
                         xi=xc[k]; yi=yc[k]
                         if (xi>sx1)*(xi<sx2)*(yi>sy1)*(yi<sy2): snb[k]=nb[m]
 
@@ -493,10 +493,10 @@ class dem(object):
 
             #update new xy limits
             skiprows=[]; skipcols=[]; diminfo=[]
-            for i in arange(nfile):
+            for i in np.arange(nfile):
                 x1,x2,y1,y2,dxy,xm,ym,nodata=diminfo0[i][:8]
-                xi=x1+dxy*arange(xm); xind=nonzero((xi>slims[i][0])*(xi<slims[i][1]))[0]
-                yi=y2-dxy*arange(ym); yind=nonzero((yi>slims[i][2])*(yi<slims[i][3]))[0]
+                xi=x1+dxy*np.arange(xm); xind=np.nonzero((xi>slims[i][0])*(xi<slims[i][1]))[0]
+                yi=y2-dxy*np.arange(ym); yind=np.nonzero((yi>slims[i][2])*(yi<slims[i][3]))[0]
                 ix1=xind.min(); ix2=xind.max(); iy1=yind.min(); iy2=yind.max();
                 ym=(iy2-iy1+1); xm=(ix2-ix1+1); y2=y2-iy1*dxy; x1=x1+ix1*dxy
                 diminfo.append([x1,x1+(xm-1)*dxy,y2-(ym-1)*dxy,y2,dxy,xm,ym,nodata])
@@ -504,7 +504,7 @@ class dem(object):
 
             #reorgnize info
             self.headers=[]
-            for i in arange(nfile):
+            for i in np.arange(nfile):
                 header=zdata()
                 header.diminfo=diminfo[i]
                 header.id=ids[i]
@@ -519,29 +519,6 @@ class dem(object):
                 header.skiprows=skiprows[i]
                 self.headers.append(header)
 
-            # #plot domains before and after removing overlapping zone
-            # if plot_domain:
-            #     colors=['r','g','b','k','m']
-            #     figure(figsize=[12,10])
-            #     subplot(2,1,1)
-            #     for i in arange(nfile):
-            #         x1,x2,y1,y2=diminfo0[i][:4]
-            #         xi=array([x1,x2,x2,x1,x1]); yi=array([y1,y1,y2,y2,y1])
-            #         plot(xi,yi,'-',color=colors[mod(i,5)],alpha=0.6)
-            #         text((x1+x2)/2,(y1+y2)/2,ids[i],color=colors[mod(i,5)],alpha=0.6)
-            #     title('domains of each dem files: original')
-
-            #     subplot(2,1,2)
-            #     for i in arange(nfile):
-            #         x1,x2,y1,y2=diminfo[i][:4]
-            #         xi=array([x1,x2,x2,x1,x1]); yi=array([y1,y1,y2,y2,y1])
-            #         xi=array([x1,x2,x2,x1,x1]); yi=array([y1,y1,y2,y2,y1])
-            #         plot(xi,yi,'-',color=colors[mod(i,5)],alpha=0.6)
-            #         text((x1+x2)/2,(y1+y2)/2,ids[i],color=colors[mod(i,5)],alpha=0.6)
-            #     title('domains of each dem files: removing overlapping zone')
-            #     gcf().tight_layout()
-            #     savefig('{}/dem_domains_overlap'.format(sdir))
-            #     close()
 
         #save domain information
         if len(names)!=1:
@@ -580,26 +557,26 @@ class dem(object):
         #pre-define varibles, will update in the loop
         if nodata is None: nodata=self.info.nodata
         sind=sind0; slen=len(sind);
-        num=arange(slen).astype('int'); pind0=None;
+        num=np.arange(slen).astype('int'); pind0=None;
 
         print('computing river network')
 
         #each pts cooresponding to a river network
-        self.rivers=[[] for i in arange(len(sind0))];
+        self.rivers=[[] for i in np.arange(len(sind0))];
 
         while len(sind)!=0:
             #search the largest stream
             sind_list=self.search_upstream(sind,ireturn=7,acc_limit=acc_limit,msg=msg)
 
             #add rivers
-            for i in arange(slen):
+            for i in np.arange(slen):
                 if pind0 is not None: self.rivers[num[i]].append(pind0[i])
                 self.rivers[num[i]].extend(sind_list[i])
                 self.rivers[num[i]].append(self.info.nodata)
 
             #create new pind for search
             pind=[]; pnum=[];
-            for i in arange(slen):
+            for i in np.arange(slen):
                 pind.extend(sind_list[i])
                 pnum.extend(ones(len(sind_list[i]))*num[i])
             pind=array(pind); pnum=array(pnum).astype('int')
@@ -610,7 +587,7 @@ class dem(object):
 
         #format
         inum=[]
-        for i in arange(len(sind0)):
+        for i in np.arange(len(sind0)):
             river=array(self.rivers[i]).astype('int')
             #apply mask
             if apply_mask:
@@ -672,7 +649,7 @@ class dem(object):
 
         #---------------method 2-----------------------------------------------
         #find boundary pts
-        fps=arange(len(sind)).astype('int'); seg=self.seg.ravel()[sind]
+        fps=np.arange(len(sind)).astype('int'); seg=self.seg.ravel()[sind]
         while len(fps)!=0:
             #exclude pts already on domain bounday
             iy,ix=unravel_index(sind[fps],ds)
@@ -718,7 +695,7 @@ class dem(object):
             acc0=self.acc.ravel()[sind0] 
             ind=flipud(argsort(acc0)) #get index of acc from high to low
             sind=sind0[ind]
-            seg=arange(len(sind)).astype('int')+1
+            seg=np.arange(len(sind)).astype('int')+1
             self.search_upstream(sind,ireturn=3,seg=seg,level_max=100,msg=msg)
 
             #add external acc (for subdomain)
@@ -727,14 +704,14 @@ class dem(object):
                     slen=len(self.info.sind_ext)
                     sind_list=self.search_downstream(self.info.sind_ext,ireturn=2)
                     sind_all=[]; acc_all=[]
-                    for i in arange(slen):
+                    for i in np.arange(slen):
                         sind_all.extend(sind_list[i])
                         acc_all.extend(ones(len(sind_list[i]))*self.info.acc_ext[i])
                     sind_all=array(sind_all); acc_all=array(acc_all)
 
                     #organize acc.
                     sind_unique=unique(sind_all); acc_unique=zeros(len(sind_unique)).astype('int')
-                    for i in arange(slen):
+                    for i in np.arange(slen):
                         sindc,iA,iB=intersect1d(sind_unique,sind_list[i],return_indices=True)
                         acc_unique[iA]=acc_unique[iA]+self.info.acc_ext[i]
                     self.acc.ravel()[sind_unique]=self.acc.ravel()[sind_unique]+acc_unique
@@ -793,39 +770,39 @@ class dem(object):
         else:
             nloop=3
         #calculate dir for each subdomain
-        for it in arange(nloop):
+        for it in np.arange(nloop):
             if it==0:
                 nsub=nsubdomain #for subdomain
             else:
                 nsub=4 #for 4 sides and 4 corners
 
             #for each section
-            for i in arange(nsub):
+            for i in np.arange(nsub):
                 if it==0:
                     #get index for subdomain
                     if i==(nsub-1):
-                        sind0=arange(i*nlim,nsize).astype('int')
+                        sind0=np.arange(i*nlim,nsize).astype('int')
                     else:
-                        sind0=arange(i*nlim,(i+1)*nlim).astype('int')
+                        sind0=np.arange(i*nlim,(i+1)*nlim).astype('int')
 
                     #exclude pts on boundary
                     iy,ix=unravel_index(sind0,ds)
                     fp=(ix>0)*(ix<(xm-1))*(iy>0)*(iy<(ym-1)); sind0=sind0[fp]
 
-                    flag=arange(8)
+                    flag=np.arange(8)
                 elif it==1:
                     #get index for each side
                     if i==0:
-                        sind0=arange(1,xm-1);
+                        sind0=np.arange(1,xm-1);
                         flag=array([0,2,3,6,7 ])
                     elif i==1:
-                        sind0=arange(1,xm-1)+(ym-1)*xm;
+                        sind0=np.arange(1,xm-1)+(ym-1)*xm;
                         flag=array([0,1,2,4,5])
                     elif i==2:
-                        sind0=arange(1,ym-1)*xm
+                        sind0=np.arange(1,ym-1)*xm
                         flag=array([0,1,3,4,7])
                     elif i==3:
-                        sind0=arange(1,ym-1)*xm+(xm-1)
+                        sind0=np.arange(1,ym-1)*xm+(xm-1)
                         flag=array([1,2,3,5,6])
                     dir[sind0]=0
                 elif it==2:
@@ -862,7 +839,7 @@ class dem(object):
                 #nind - index of the neighbor with min. depth
                 #ndir - direction of the neighbor with min.depth
                 ndem=ones(slen)*nodata; nind=zeros(slen).astype('int');  ndir=nind.copy() # pdir=nind.copy()
-                for m in arange(len(offsets)):
+                for m in np.arange(len(offsets)):
                     sindi=sind+offsets[m];
                     fpo=sindi>=nsize; sindi[fpo]=nsize-1
                     demi=dem0[sindi]
@@ -914,7 +891,7 @@ class dem(object):
         #dirs on four sides
         dirs=[[32,64,128],[2,4,8],[8,16,32],[1,2,128]]
         #inds=[arange(1,xm-1),xm+arange(1,xm-1),2*xm+arange(0,ym-2),2*xm+(ym-2)+arange(0,ym-2)]
-        for i in arange(4):
+        for i in np.arange(4):
             if i==0:
                 fpr=(iy==0)*(ix>0)*(ix<(xm-1))
             elif i==1:
@@ -931,7 +908,7 @@ class dem(object):
         #dirs on four corners
         dirs=[[1,2,4],[4,8,16],[1,128,64],[16,32,64]]
         #inds=[0,xm-1,xm,2*xm-1]
-        for i in arange(4):
+        for i in np.arange(4):
             if i==0:
                 fpr=(iy==0)*(ix==0)
             elif i==1:
@@ -985,14 +962,14 @@ class dem(object):
         #breakpoint()
         #search and mark each depression
         print('---------identify and mark depressions------------------------')
-        slen=len(sind0); seg0=arange(slen)+1; h0=self.dem.ravel()[sind0];
+        slen=len(sind0); seg0=np.arange(slen)+1; h0=self.dem.ravel()[sind0];
         self.search_upstream(sind0,ireturn=3,seg=seg0,level_max=level_max,msg=msg)
         #breakpoint()
         #At this point, self.seg is created
 
         #get indices for each depression; here seg is numbering, not segment number
         print('---------save all depression points---------------------------')
-        sind_segs=self.search_upstream(sind0,ireturn=9,seg=arange(slen),acc_calc=True,level_max=level_max,msg=msg)
+        sind_segs=self.search_upstream(sind0,ireturn=9,seg=np.arange(slen),acc_calc=True,level_max=level_max,msg=msg)
         ns0=array([len(i) for i in sind_segs])
 
         #get depression boundary
@@ -1001,7 +978,7 @@ class dem(object):
 
         #loop to reverse dir along streams
         print('---------fill depressions-------------------------------------')
-        ids=arange(slen); iflag=0
+        ids=np.arange(slen); iflag=0
         while len(sind0)!=0:
             iflag=iflag+1
             print('fill depression: iloop={}, ndep={}'.format(iflag,slen))
@@ -1014,13 +991,13 @@ class dem(object):
 
             #exclude nonboundary indices
             sind_bnd_all=[]; ids_bnd=[]; id1=0; id2=0;
-            for i in arange(slen):
+            for i in np.arange(slen):
                 sindi=unique(self.boundary[i]); id2=id1+len(sindi)
                 sind_bnd_all.extend(sindi)
-                ids_bnd.append(arange(id1,id2).astype('int')); id1=id1+len(sindi)
+                ids_bnd.append(np.arange(id1,id2).astype('int')); id1=id1+len(sindi)
             sind_bnd_all=array(sind_bnd_all);ids_bnd=array(ids_bnd)
             flag_bnd_all=self.search_flat(sind_bnd_all,ireturn=10,msg=msg)
-            for i in arange(slen):
+            for i in np.arange(slen):
                 self.boundary[i]=sind_bnd_all[ids_bnd[i][flag_bnd_all[ids_bnd[i]]]]
 
             #recalcuate bnd for seg with false boundary
@@ -1040,10 +1017,10 @@ class dem(object):
 
             #rearange the boundary index
             sind_bnd_all=[]; ids_bnd=[]; id1=0; id2=0;
-            for i in arange(slen):
+            for i in np.arange(slen):
                 sindi=self.boundary[i]; id2=id1+len(sindi)
                 sind_bnd_all.extend(sindi)
-                ids_bnd.append(arange(id1,id2).astype('int')); id1=id1+len(sindi)
+                ids_bnd.append(np.arange(id1,id2).astype('int')); id1=id1+len(sindi)
             sind_bnd_all=array(sind_bnd_all);ids_bnd=array(ids_bnd);
 
             #find all the neighboring indices with minimum depth
@@ -1089,7 +1066,7 @@ class dem(object):
 
             #get all stream index and its dir
             sind=[]; dir=[];
-            for i in arange(len(fph)):
+            for i in np.arange(len(fph)):
                 id=fph[i];
                 #S.seg.ravel()[sind_segs[id]]=seg_min[id]; seg0[id]=seg_min[id]
                 sind_stream=sind_streams[i]
@@ -1099,12 +1076,12 @@ class dem(object):
 
             #reverse dir
             dir_0=[128,64,32,16,8,4,2,1]; dir_inv=[8,4,2,1,128,64,32,16]
-            for i in arange(8):
+            for i in np.arange(8):
                 fpr=dir0==dir_0[i]; dir[fpr]=dir_inv[i]
             self.dir.ravel()[sind]=dir;
 
             #----build the linkage--------------------------------------------------
-            s_0=seg0.copy(); d_0=seg_min.copy(); d_0[setdiff1d(arange(slen),fph)]=-1
+            s_0=seg0.copy(); d_0=seg_min.copy(); d_0[setdiff1d(np.arange(slen),fph)]=-1
             while True:
                 fpz=nonzero((d_0!=0)*(d_0!=-1))[0]
                 if len(fpz)==0: break
@@ -1149,7 +1126,7 @@ class dem(object):
             #update variables
             sind0=sind0[ids_left]; seg0=seg0[ids_left]; h0=h0[ids_left]; ns0=ns0[ids_left]
             self.boundary=self.boundary[ids_left]; sind_segs=sind_segs[ids_left]
-            slen=len(sind0); ids=arange(slen)
+            slen=len(sind0); ids=np.arange(slen)
         #clean
         delattr(self,'seg');delattr(self,'boundary')
 
@@ -1174,7 +1151,7 @@ class dem(object):
         #exclude nodata bnd pts
         if len(self.info.sind_bnd_nodata)!=0:
             sind_bnd_nodata,iA,iB=intersect1d(sind0,self.info.sind_bnd_nodata,return_indices=True)
-            fp=setdiff1d(arange(len(sind0)),iA)
+            fp=setdiff1d(np.arange(len(sind0)),iA)
             sind0=sind0[fp]; dem0=dem0[fp]; dir0=dir0[fp]; dir=dir[fp]
 
         if len(sind0)==0: return
@@ -1190,10 +1167,10 @@ class dem(object):
         if len(fpl)!=0:
             sind_list=array([intersect1d(sindl,i) for i in sind_list[fpl]])
             sind_all=[]; ids=[]; id1=0; id2=0;
-            for i in arange(len(fpl)):
+            for i in np.arange(len(fpl)):
                 sindi=unique(sind_list[i]); id2=id1+len(sindi)
                 sind_all.extend(sindi)
-                ids.append(arange(id1,id2).astype('int')); id1=id1+len(sindi)
+                ids.append(np.arange(id1,id2).astype('int')); id1=id1+len(sindi)
             sind_all=array(sind_all)
             sindu,fpu=unique(sind_all,return_inverse=True); sindc,iA,iB=intersect1d(sindu,sindl,return_indices=True)
             if not array_equal(sindu,sindc): sys.exit('sindc!=sindu')
@@ -1226,7 +1203,7 @@ class dem(object):
 
         #compute all segment number
         fp=self.dir.ravel()[self.info.sind_bnd_local]==0
-        sind00=sort(self.info.sind_bnd_local[fp]); seg00=arange(len(sind00)).astype('int')+1
+        sind00=sort(self.info.sind_bnd_local[fp]); seg00=np.arange(len(sind00)).astype('int')+1
         self.search_upstream(sind00,ireturn=3,seg=seg00,level_max=level_max,msg=msg)
         #get h00
         tmp,iA,iB=intersect1d(sind00,self.info.sind_bnd_local,return_indices=True); h00=self.info.dem_bnd_local[iB]
@@ -1271,9 +1248,9 @@ class dem(object):
             sind_all=-ones([8,slen]).astype('int'); sind_all.ravel()[fpt[fpn]]=sind_true[fpn]
             dir_all=tile(array([1,64,16,4,128,32,8,2]),slen).reshape([slen,8]).T
 
-            h_b=dem_all[iy_min,arange(slen)];
-            sindb=sind_all[iy_min,arange(slen)]; #on the segment boundary
-            dir_min=dir_all[iy_min,arange(slen)];
+            h_b=dem_all[iy_min,np.arange(slen)];
+            sindb=sind_all[iy_min,np.arange(slen)]; #on the segment boundary
+            dir_min=dir_all[iy_min,np.arange(slen)];
             seg_min=self.seg.ravel()[sindb]
 
             #find sind_min, h_min, id_min (refer to index of sind0)
@@ -1300,7 +1277,7 @@ class dem(object):
             if len(fpr)==0: break
 
             #to find seg_min_final, for mofidy
-            seg_min[setdiff1d(arange(slen),fpm)]=-1;  seg_min[fpl]=-1; seg_min_final=seg_min.copy()
+            seg_min[setdiff1d(np.arange(slen),fpm)]=-1;  seg_min[fpl]=-1; seg_min_final=seg_min.copy()
             fpi=nonzero(seg_min!=-1)[0];
             while True:
                 seg_min_unique,fpu=unique(seg_min_final[fpi],return_inverse=True)
@@ -1310,7 +1287,7 @@ class dem(object):
                 seg_min_final[fpi]=seg_min_unique[fpu]
 
             #to find id_min_final
-            id_min[setdiff1d(arange(slen),fpm)]=-1; id_min[fpl]=-1;
+            id_min[setdiff1d(np.arange(slen),fpm)]=-1; id_min[fpl]=-1;
             fpi=nonzero(id_min!=-1)[0]; id_min_final=id_min.copy()
             #because all of fpi are linked to another seg that is not in fpi itself. Therefore, id_min and fpi has no intersection
             while True:
@@ -1326,7 +1303,7 @@ class dem(object):
                 if id_min[i]!=-1: sind_segs[id_min_final[i]]=r_[sind_segs[id_min_final[i]],sind_segs[i]]
 
             #update sind0, sind_segs
-            ids=setdiff1d(arange(slen),fpr)
+            ids=setdiff1d(np.arange(slen),fpr)
             sind0=sind0[ids]; slen=len(sind0)
             sind_segs=sind_segs[ids]
 
@@ -1349,14 +1326,14 @@ class dem(object):
 
             #exclude nonboundary indices
             sind_bnd_all=[]; ids=[]; id1=0; id2=0;
-            for i in arange(slen):
+            for i in np.arange(slen):
                 nsind=len(self.boundary[i])
                 id2=id1+nsind
                 sind_bnd_all.extend(self.boundary[i])
-                ids.append(arange(id1,id2).astype('int')); id1=id1+nsind
+                ids.append(np.arange(id1,id2).astype('int')); id1=id1+nsind
             sind_bnd_all=array(sind_bnd_all); ids=array(ids)
             flag_bnd_all=self.search_flat(sind_bnd_all,ireturn=10,msg=msg)
-            for i in arange(slen):
+            for i in np.arange(slen):
                 self.boundary[i]=sind_bnd_all[ids[i][flag_bnd_all[ids[i]]]]
 
             #recalcuate bnd for seg with false boundary; caused by some segs resides some other segs
@@ -1375,19 +1352,19 @@ class dem(object):
 
             #rearrange boundary index
             sind_bnd_all=[]; h0_all=[]; ids=[]; id1=0; id2=0;
-            for i in arange(slen):
+            for i in np.arange(slen):
                 nsind=len(self.boundary[i])
                 id2=id1+nsind
                 sind_bnd_all.extend(self.boundary[i])
                 h0_all.extend(ones(nsind)*h0[i])
-                ids.append(arange(id1,id2).astype('int')); id1=id1+nsind
+                ids.append(np.arange(id1,id2).astype('int')); id1=id1+nsind
             sind_bnd_all=array(sind_bnd_all); h0_all=array(h0_all); ids=array(ids)
 
             #length of routes
             len_stream=self.search_downstream(sind_bnd_all,ireturn=4,level_max=50,msg=msg)
 
             #sort by length
-            for i in arange(slen):
+            for i in np.arange(slen):
                 id=ids[i]
                 ind_sort=argsort(len_stream[id])
                 len_stream[id]=len_stream[id][ind_sort]
@@ -1433,7 +1410,7 @@ class dem(object):
             segn=dirn.copy()
 
             dir0=array([16,4,1,64,8,2,128,32]).astype('int')
-            for i in arange(8):
+            for i in np.arange(8):
                 fp=(flag_all[i])*(~flagn)
                 flagn[fp]=True
                 dirn[fp]=dir0[i]
@@ -1442,7 +1419,7 @@ class dem(object):
 
             #find the outlet for each segment
             fpo=[]; sind_min=[]; dir_min=[]; seg_min=[]
-            for i in arange(slen):
+            for i in np.arange(slen):
                 id=ids[i]
                 fp=nonzero(flagn[id])[0]
                 if len(fp)==0: continue
@@ -1457,7 +1434,7 @@ class dem(object):
             #save index and dir along the shortest route
             sind_streams=self.search_downstream(sind_min,ireturn=2,msg=msg)
             sind_all=[]; dir_all=[]
-            for i in arange(len(fpo)):
+            for i in np.arange(len(fpo)):
                 sind_stream=sind_streams[i]
                 sind_all.extend(sind_stream)
                 dir_all.extend(r_[dir_min[i], self.dir.ravel()[sind_stream][:-1]])
@@ -1465,7 +1442,7 @@ class dem(object):
 
             #reverse dir along the shortest route
             dir_0=[128,64,32,16,8,4,2,1]; dir_inv=[8,4,2,1,128,64,32,16]
-            for i in arange(8):
+            for i in np.arange(8):
                 fpr=dir_all0==dir_0[i]; dir_all[fpr]=dir_inv[i]
             self.dir.ravel()[sind_all]=dir_all;
 
@@ -1482,14 +1459,14 @@ class dem(object):
             id_min_final_unique[iB]=iA; id_min_final=id_min_final_unique[fpu]
 
             #assign sind_segs, S.boundary
-            for i in arange(len(fpo)):
+            for i in np.arange(len(fpo)):
                 self.seg.ravel()[sind_segs[fpo[i]]]=seg_min_final[i]
                 if id_min_final[i]!=-1:
                     sind_segs[id_min_final[i]]=r_[sind_segs[id_min_final[i]],sind_segs[fpo[i]]]
                     self.boundary[id_min_final[i]]=r_[self.boundary[id_min_final[i]],self.boundary[fpo[i]]]
 
             #update sind0, sind_segs, S.boundary, slen
-            id_left=setdiff1d(arange(slen),fpo)
+            id_left=setdiff1d(np.arange(slen),fpo)
             sind0=sind0[id_left]; slen=len(sind0)
             sind_segs=sind_segs[id_left]
             self.boundary=self.boundary[id_left]
@@ -1601,7 +1578,7 @@ class dem(object):
             #get neighboring minimum dem and indices
             fp=dem_true==self.info.nodata;  dem_true[fp]=1e5
             dem=ones([8,slen])*1e5; dem.ravel()[fpt]=dem_true
-            iy_min=argmin(dem,axis=0); dem_min=dem[iy_min,arange(slen)]
+            iy_min=argmin(dem,axis=0); dem_min=dem[iy_min, np.arange(slen)]
 
             #modify sind0's dir and dem
             #dir0=array([128,64,32,16,8,4,2,1])
@@ -1616,7 +1593,7 @@ class dem(object):
 
             sind=zeros([8,slen]).astype('int'); sind.ravel()[fpt]=sind_true
             iy_min=argmin(dem,axis=0);
-            sind_min=sind[iy_min,arange(slen)]; dem_min=dem[iy_min,arange(slen)];
+            sind_min=sind[iy_min, np.arange(slen)]; dem_min=dem[iy_min, np.arange(slen)];
             return sind_min, dem_min
 
         if ireturn==8:
@@ -1630,9 +1607,9 @@ class dem(object):
                 sind=zeros([8,slen]).astype('int'); sind.ravel()[fpt]=sind_true
 
                 iy_min=argmin(dem,axis=0);
-                sind_min=sind[iy_min,arange(slen)];
-                dem_min=dem[iy_min,arange(slen)];
-                dir_min=dir[iy_min,arange(slen)];
+                sind_min=sind[iy_min, np.arange(slen)];
+                dem_min=dem[iy_min, np.arange(slen)];
+                dir_min=dir[iy_min, np.arange(slen)];
                 return sind_min,dem_min,dir_min
             elif method==1:
                 #find depth for sindn based on self.info.dem_bnd_local
@@ -1646,10 +1623,10 @@ class dem(object):
                 sindc=zeros([8,slen]).astype('int'); sindc.ravel()[fpt[fpn]]=sindn
 
                 iy_min=argmin(dem,axis=0)
-                sind_min=sind[iy_min,arange(slen)]
-                dem_min=dem[iy_min,arange(slen)]
-                dir_min=dir[iy_min,arange(slen)]
-                sindc_min=sindc[iy_min,arange(slen)]
+                sind_min=sind[iy_min, np.arange(slen)]
+                dem_min=dem[iy_min, np.arange(slen)]
+                dir_min=dir[iy_min, np.arange(slen)]
+                sindc_min=sindc[iy_min, np.arange(slen)]
                 return sind_min,sindc_min,dem_min,dir_min
 
         if ireturn==10:
@@ -1681,8 +1658,8 @@ class dem(object):
             dir_flat=zeros(slen).astype('int')
             dem0=int(1e5)*ones(nsize).astype('int'); dem0[sind0]=dem_flat;
             dem=int(1e5)*ones([8,slen]).astype('int'); dem.ravel()[fpt[fps]]=dem0[sind_true[fps]]
-            iy_min=argmin(dem,axis=0); dem_min=dem[iy_min,arange(slen)]
-            dir_min=tile(array([1,64,16,4,128,32,8,2]),[slen,1]).T[iy_min,arange(slen)]
+            iy_min=argmin(dem,axis=0); dem_min=dem[iy_min, np.arange(slen)]
+            dir_min=tile(array([1,64,16,4,128,32,8,2]),[slen,1]).T[iy_min, np.arange(slen)]
             fp=dem_flat>dem_min; dir_flat[fp]=dir_min[fp]
             return dir_flat
 
@@ -1720,7 +1697,7 @@ class dem(object):
                 #2nd round of search loop from inside to outside
                 if ireturn==4:
                     self.dem_flat_save=self.dem_flat.copy()
-                    for i in arange(len(self.sind_list)):
+                    for i in np.arange(len(self.sind_list)):
                         self.vmax=self.search_flat(self.sind_list[-i-1],ireturn=ireturn,wlevel=2,level=0,level_max=level_max)
 
                 #save results
@@ -1823,14 +1800,14 @@ class dem(object):
         else:
             pind=0
         #find the starting search pt
-        for i in arange(8):
+        for i in np.arange(8):
             fp=sind[i,:]==pind
             iy0[fp]=i
 
         #find the next pts
         sind_next=-ones(slen).astype('int')
-        ix=arange(slen).astype('int')
-        for i in arange(8):
+        ix=np.arange(slen).astype('int')
+        for i in np.arange(8):
             iy0=iy0+1
             iy1=mod(iy0,8); iy2=mod(iy0+1,8)
             fpn=(sind[iy1,ix]==-1)*(sind[iy2,ix]!=-1)*(sind_next==-1)
@@ -1848,7 +1825,7 @@ class dem(object):
             self.ppind=sind0.copy() #previous pts
             self.flag_search=True
             self.sind_list=[[i] for i in sind0]
-            self.snum=arange(slen).astype('int')
+            self.snum=np.arange(slen).astype('int')
 
             #1-level search loop
             iflag=0
@@ -1965,7 +1942,7 @@ class dem(object):
             if wlevel==0: #first level recursive search
                 #init
                 if seg is None:
-                    seg0=arange(slen)+1
+                    seg0=np.arange(slen)+1
                     #self.acc=zeros(prod(ds)).astype('int'); self.acc[self.dir.ravel()==-1]=-1
                     self.acc=zeros(prod(ds), dtype=int32); self.acc[self.dir.ravel()==-1]=-1
                 else:
@@ -1989,7 +1966,7 @@ class dem(object):
                     self.search_upstream(self.sind_next,ireturn=ireturn,seg=self.seg_next, wlevel=1,level=0,level_max=level_max)
 
                 #search from upstream to downstream on the 1-level
-                for i in arange(len(self.sind_list)):
+                for i in np.arange(len(self.sind_list)):
                     if seg is not None: continue
                     if msg: print('search upstream backward,ireturn={}: loop={}, npt={}'.format(ireturn,len(self.sind_list)-i,len(self.sind_list[-i-1])))
                     self.search_upstream(self.sind_list[-i-1],ireturn=ireturn,seg=self.seg_list[-i-1], wlevel=1,level=0,level_max=level_max,acc_calc=True)
@@ -2053,7 +2030,7 @@ class dem(object):
                 fpc=acc<acc_limit; acc[fpc]=0; sind[fpc]=-1;
 
             #get index for cells_next with maximum acc
-            ix=arange(slen).astype('int'); iy=argmax(acc,axis=0)
+            ix=np.arange(slen).astype('int'); iy=argmax(acc,axis=0)
             sind_next=sind[iy,ix]
 
         #just one level
@@ -2063,7 +2040,7 @@ class dem(object):
         #one-level upstream, all the cells except the largest one
         if ireturn==5:
             sind[iy,ix]=-1; fpn=sind!=-1;
-            nind0=tile(arange(slen),8).reshape([8,slen]).astype('int')
+            nind0=tile(np.arange(slen),8).reshape([8,slen]).astype('int')
             sind_next=sind[fpn]; nind=nind0[fpn]
             return sind_next,nind
 
@@ -2079,7 +2056,7 @@ class dem(object):
                 self.sind_list=[[i] for i in sind0]
                 self.sind_bnd=[[] for i in sind0]
                 self.sind_seg=[[] for i in sind0]
-                self.seg_next=arange(slen)
+                self.seg_next=np.arange(slen)
 
                 #1-level search loop
                 iflag=0
@@ -2171,7 +2148,7 @@ class dem(object):
         sdir=self.dir.ravel()[sind0]
         iy0,ix0=unravel_index(sind0,ds)
         yind=-ones(slen).astype('int'); xind=yind.copy(); sind_next=yind.copy()
-        for i in arange(8):
+        for i in np.arange(8):
             fp=sdir==dir_out[i]
             yind[fp]=iy0[fp]+offset_y[i]
             xind[fp]=ix0[fp]+offset_x[i]
@@ -2205,7 +2182,7 @@ class dem(object):
                          ns0=array([len(i) for i in self.sind_list])
                          ns=array([len(unique(i)) for i in self.sind_list])
                          fpe=nonzero(((ns0-ns)>1)*(self.flag_next))[0]
-                         for i in arange(len(fpe)):
+                         for i in np.arange(len(fpe)):
                               self.sind_list[fpe[i]]=self.sind_list[fpe[i]][:ns[fpe[i]]+2]
                          self.flag_next[fpe]=False
 
@@ -2325,7 +2302,7 @@ class dem(object):
 
         #combine all shpfiles
         S0=zdata(); nrec=0; X=[]; Y=[]
-        for i in arange(len(snames)):
+        for i in np.arange(len(snames)):
             fname='{}.shp'.format(snames[i])
             if not os.path.exists(fname): continue
 
@@ -2335,14 +2312,14 @@ class dem(object):
             S0.prj=S.prj; S0.type=S.type
 
             #read mth river
-            for m in arange(S.nrec):
+            for m in np.arange(S.nrec):
                 xi=S.xy[m][:,0]; yi=S.xy[m][:,1]
                 if not isnan(xi[0]): xi=r_[nan,xi]; yi=r_[nan,yi]
                 if not isnan(xi[-1]): xi=r_[xi,nan]; yi=r_[yi,nan]
                 nind=nonzero(isnan(xi))[0]; nsec=len(nind)-1
 
                 #read kth section
-                for k in arange(nsec):
+                for k in np.arange(nsec):
                     i1=nind[k]+1; i2=nind[k+1]
                     xii=xi[i1:i2]; yii=yi[i1:i2]; slen=len(xii)
 
@@ -2383,11 +2360,12 @@ class dem(object):
 
         #get xy
         SF.xy=[];
-        for i in arange(len(SF.data)):
+        for i in np.arange(len(SF.data)):
             yi,xi=self.get_coordinates(SF.data[i])
             if len(xi)==0: continue
-            fp=(xi==self.info.nodata)|(yi==self.info.nodata);
-            xi[fp]=nan; yi[fp]=nan;
+            fp=(xi==self.info.nodata)|(yi==self.info.nodata)
+            xi[fp]=nan; yi[fp]=nan
+
             SF.xy.append(c_[xi,yi])
         SF.xy=array(SF.xy, dtype='object')
         if SF.xy.ndim==3: SF.xy=[*SF.xy]
@@ -2399,8 +2377,8 @@ class dem(object):
         total = 0
         branches = []
         for i, river in enumerate(SF.xy):
+             
             idxs=np.squeeze(np.argwhere(np.isnan(river[:,0])))
-            #breakpoint()
             try:
                 #The main channel has tributaries
                 n_branches = idxs.shape[0]
@@ -2426,11 +2404,12 @@ class dem(object):
                     #gdf = gpd.GeoDataFrame(df)
                     #gdf.to_file(f'branch_{i}.shp')
                 
-                print(total)
                 channel = ssplit(mainchannel, MultiPoint(intersections))
                 for branch in channel.geoms:
                     total += 1
                     branches.append({'feature_id':total, 'geometry': branch})
+            #except Exception as error:
+            #    print("An exception occurred:", type(error).__name__, "–", error) 
             except:
                 #only have main channel no tributaries
                 total += 1
@@ -2443,20 +2422,13 @@ class dem(object):
         #gdf.to_file(sname)
         return gdf
 
-
-        #if npt_smooth is not None:
-        #    SF.xy=self.smooth_river(SF.xy,npt_smooth=npt_smooth)
-
-        ##write shapefile
-        #write_shapefile_data(sname,SF)
-
     def smooth_river(self,data,npt_smooth=5):
 
         #parameter
         ds=self.info.ds; nodata=self.info.nodata
 
         #for each river
-        for i in arange(len(self.rivers)):
+        for i in np.arange(len(self.rivers)):
             river=self.rivers[i]; rxy=data[i].copy()
             sind_unique,fpu,npt_unique=unique(river,return_inverse=True,return_counts=True)
             npt=npt_unique[fpu]; npt[river==nodata]==-1;
@@ -2464,7 +2436,7 @@ class dem(object):
             #for each section
             sids=nonzero((npt>1)|(npt==-1))[0]
 
-            for m in arange(len(sids)):
+            for m in np.arange(len(sids)):
                 #get subsection indices
                 if m==0:
                     id1=0;
@@ -2504,7 +2476,7 @@ class dem(object):
 
         #collect bnd info from other DEMs
         sind_all=[]; dem_all=[]; acc_all=[]; sx_all=[]; sy_all=[];
-        for i in arange(len(self.info.nbs)):
+        for i in np.arange(len(self.info.nbs)):
             fname='{}/{}_{}.npz'.format(sdir,self.info.sname0,self.info.ids[self.info.nbs[i]])
             flag_loop=True
             while flag_loop:
@@ -2538,7 +2510,7 @@ class dem(object):
         acc_all_ext=acc_all[fp]; sind_all_ext=sind[ids][fp]
         sind_ext,fpu,npt_unique=unique(sind_all_ext,return_inverse=True,return_counts=True)
         acc_ext=zeros(len(sind_ext)).astype('int')
-        for i in arange(len(acc_all_ext)):
+        for i in np.arange(len(acc_all_ext)):
             acc_ext[fpu[i]]=acc_ext[fpu[i]]+acc_all_ext[i]
 
         self.info.sind_ext=sind_ext; self.info.acc_ext=acc_ext
@@ -2614,7 +2586,7 @@ class dem(object):
         flag_loop=True
         while flag_loop:
               flag_loop=False
-              for i in arange(len(S.info.nbs)):
+              for i in np.arange(len(S.info.nbs)):
                   fname='{}/{}_{}.npz'.format(sdir,S.info.sname0,S.info.ids[S.info.nbs[i]])
                   if not os.path.exists(fname): flag_loop=True
               time.sleep(10)
