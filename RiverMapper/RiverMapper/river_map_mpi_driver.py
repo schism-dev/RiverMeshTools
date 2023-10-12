@@ -200,9 +200,9 @@ def river_map_mpi_driver(
     comm.barrier()
 
     # Leveraging MPI to cache DEM tiles in parallel.
-    # This is useful when the DEMs are large and there are many of them.
-    # And when there are existing cache files, try reading from them;
-    # if the reading is not successful, then regenerate the cache for the corresponding DEM tiles.
+    # This is useful when there a large number of large DEM tiles.
+    # If there are existing cache files, try reading from them;
+    # if not successful, then regenerate the cache.
     # The actual reading of DEM caches is done in make_river_map()
     # This is why both this driver and make_river_map() have the same i_DEM_cache option
     if dems_json_file is not None and river_map_config.optional['i_DEM_cache']:
