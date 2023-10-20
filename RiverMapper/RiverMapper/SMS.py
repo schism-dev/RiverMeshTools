@@ -77,7 +77,7 @@ def curvature(pts):
     return cur
 
 def get_perpendicular_angle(line):
-    line_cplx = np.squeeze(line.copy().view(np.complex128))
+    line_cplx = np.squeeze(line[:, :2].copy().view(np.complex128))
     angles = np.angle(np.diff(line_cplx))
     angle_diff0 = np.diff(angles)
     angle_diff = np.diff(angles)
@@ -494,7 +494,7 @@ class Levee_SMS_MAP(SMS_MAP):
                 self.offsetline_list.append(SMS_ARC(points=np.c_[x_off, y_off]))
         return SMS_MAP(arcs=self.subsampled_centerline_list), SMS_MAP(arcs=self.offsetline_list)
 
-def get_all_points_from_shp(fname, iNoPrint=True, iCache=False, cache_folder=None):
+def get_all_points_from_shp(fname, iNoPrint=True, iCache=False, cache_folder=None, get_z=False):
     if not iNoPrint: print(f'reading shapefile: {fname}')
 
     # using geopandas, which seems more efficient than pyshp
@@ -510,7 +510,10 @@ def get_all_points_from_shp(fname, iNoPrint=True, iCache=False, cache_folder=Non
         npts += shp_points
         nvalid_shps += 1
 
-    xyz = np.zeros((npts, 2), dtype=float)
+    if get_z:
+        xyz = np.zeros((npts, 3), dtype=float)
+    else:
+        xyz = np.zeros((npts, 2), dtype=float)
     shape_pts_l2g =[None] * nvalid_shps
     ptr = 0; ptr_shp = 0
     for i in range(shapefile.shape[0]):
@@ -520,7 +523,11 @@ def get_all_points_from_shp(fname, iNoPrint=True, iCache=False, cache_folder=Non
             print(f"warning: shape {i+1} of {shapefile.shape[0]} is invalid")
             continue
 
-        xyz[ptr:ptr+shp_points] = np.array(shapefile.iloc[i, :]['geometry'].coords.xy).T
+        if get_z:
+            xyz[ptr:ptr+shp_points] = np.array(shapefile.iloc[i, :]['geometry'].coords)
+        else:
+            xyz[ptr:ptr+shp_points] = np.array(shapefile.iloc[i, :]['geometry'].coords.xy).T
+            # todo: xyz = np.array(shapefile.iloc[i, :]['geometry'].coords)[:, :2]  # more efficient
         shape_pts_l2g[ptr_shp] = np.array(np.arange(ptr, ptr+shp_points))
         ptr += shp_points; ptr_shp += 1;
     if ptr != npts or ptr_shp != nvalid_shps:

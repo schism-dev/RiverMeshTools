@@ -739,11 +739,11 @@ def snap_points_to_lines(arc_points, snap_arc_reso):
         k=-((x1-x)*(x2-x1)+(y1-y)*(y2-y1))/np.maximum(sys.float_info.epsilon, (x1-x2)**2+(y1-y2)**2)
         xn=k*(x2-x1)+x1; yn=k*(y2-y1)+y1
 
-        # foot of perpendicular is on the line segment
+        # foot of perpendicular is on the line segment, calculate the distance in the standard way
         fpn=(k>=0)*(k<=1)
         dist[fpn]=abs((x+1j*y)-(xn+1j*yn))[fpn]  # pt-line dist
 
-        # foot of perpendicular is not on the line segment
+        # foot of perpendicular is not on the line segment, calculate the distance to the nearest end point of the line segment
         dist[~fpn]=np.array(np.r_[abs((x+1j*y)-(x1+1j*y1))[None,...], abs((x+1j*y)-(x2+1j*y2))[None,...]]).min(axis=0)[~fpn] #pt-pt dist
 
         return dist
@@ -827,6 +827,7 @@ def clean_intersections(
         buffer_coef=0.3, idummy=False, i_OCSMesh=False, projected_crs=cpp_crs
     ):
     '''
+    Deprecated!
     Clean arcs (LineStringList, a list of Shapely's LineString objects)
     by first intersecting them (by unary_union),
     then snapping target points (within 'target_polygons') to 'snap_points'.
