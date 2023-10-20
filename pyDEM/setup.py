@@ -27,6 +27,6 @@ with io.open('README.md','r', encoding='utf8') as fh:
     'shapely',
     'richdem',
     'fiona',
-    'geopandas'
+    'geopandas>=0.13.2'
   ],
 )
