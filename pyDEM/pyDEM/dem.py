@@ -2368,6 +2368,10 @@ class dem(object):
 
             SF.xy.append(c_[xi,yi])
         SF.xy=array(SF.xy, dtype='object')
+
+        if np.size(SF.xy) == 0:
+            raise ValueError(f'No thalwegs for the given threshold, try a smaller value!')
+
         if SF.xy.ndim==3: SF.xy=[*SF.xy]
 
         if npt_smooth is not None:
@@ -2378,7 +2382,7 @@ class dem(object):
         branches = []
         for i, river in enumerate(SF.xy):
              
-            idxs=np.squeeze(np.argwhere(np.isnan(river[:,0])))
+            idxs=np.squeeze(np.argwhere(np.isnan(river[:,0].astype('float32'))))
             try:
                 #The main channel has tributaries
                 n_branches = idxs.shape[0]
