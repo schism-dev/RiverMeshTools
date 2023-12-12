@@ -33,6 +33,7 @@ class ConfigRiverMap():
     DEFAULT_river_threshold = (5, 600)
     DEFAULT_min_arcs = 3
     DEFAULT_width2narcs_option = 'regular'
+    DEFAULT_custom_width2narcs = None
     DEFAULT_elev_scale = 1.0
     DEFAULT_outer_arcs_positions = ()
     DEFAULT_R_coef=0.4
@@ -57,6 +58,7 @@ class ConfigRiverMap():
         river_threshold = DEFAULT_river_threshold,
         min_arcs = DEFAULT_min_arcs,
         width2narcs_option = DEFAULT_width2narcs_option,
+        custom_width2narcs = DEFAULT_custom_width2narcs,
         elev_scale = DEFAULT_elev_scale,
         outer_arcs_positions = DEFAULT_outer_arcs_positions,
         R_coef= DEFAULT_R_coef,

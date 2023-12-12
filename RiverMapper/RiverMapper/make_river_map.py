@@ -511,7 +511,7 @@ def get_thalweg_neighbors(thalwegs, thalweg_endpoints):
 
     return thalweg_neighbors
 
-def width2narcs(width, min_arcs=3, opt='regular'):
+def default_width2narcs(width, min_arcs=3, opt='regular'):
 
     if callable(opt):  # user-defined function
         nrow = int(max(3, opt(width)))  # force at least 2 divisions (3 points) in the cross-section
@@ -1191,6 +1191,7 @@ def make_river_map(
         river_threshold=ConfigRiverMap.DEFAULT_river_threshold,
         min_arcs=ConfigRiverMap.DEFAULT_min_arcs,
         width2narcs_option=ConfigRiverMap.DEFAULT_width2narcs_option,
+        custom_width2narcs=ConfigRiverMap.DEFAULT_custom_width2narcs,
         elev_scale=ConfigRiverMap.DEFAULT_elev_scale,
         outer_arcs_positions=ConfigRiverMap.DEFAULT_outer_arcs_positions,
         R_coef=ConfigRiverMap.DEFAULT_R_coef,
@@ -1223,7 +1224,8 @@ def make_river_map(
     | mpi_print_prefix | string | a prefix string to identify the calling mpi processe in the output messages; can be empty |
     | river_threshold | float | minimum and maximum river widths (in meters) to be resolved |
     | min_arcs | integer | minimum number of arcs to resolve a channel (including bank arcs, inner arcs and outer arcs) |
-    | width2narcs_option | string or callable | pre-defined options ('regular', 'sensitive', 'insensitve') or a user-defined callable for determining number of cross-section points based on river width |
+    | width2narcs_option | string | pre-defined options ('regular', 'sensitive', 'insensitve') or 'custom' if a user-defined function is specified |
+    | custom_width2narcs | a user-defined function | a function that takes one parameter 'width' and returns the number of arcs in the cross-channel direction |
     | elev_scale | float | scaling factor for elevations; a number of -1 (invert elevations) is useful for finding ridges (e.g., of a barrier island) |
     | outer_arc_positions | a tuple of floats | relative position of outer arcs, e.g., (0.1, 0.2) will add 2 outer arcs on each side of the river (4 in total), 0.1 \* riverwidth and 0.2 \* riverwidth from the banks. |
     | R_coef | float | coef controlling the along-channel resolutions at river bends (with a radius of R), a larger number leads to coarser resolutions (R*R_coef) |
@@ -1262,6 +1264,19 @@ def make_river_map(
     else:
         require_dem = True
         endpoints_scale = 1.3
+    
+    if custom_width2narcs is not None:
+        if width2narcs_option != 'custom':
+            print(f'{mpi_print_prefix} warning: custom_width2narcs is not None but width2narcs_option is not "custom", reset to "custom"')
+            width2narcs_option = 'custom'
+
+        # decorate the function to accept same parameters as default_width2narcs
+        def decorated_custom_width2narcs(width, min_arcs=min_arcs, opt=width2narcs_option):  # opt is dummy
+            return max(min_arcs, custom_width2narcs(width))  # make sure there are at least min_arcs arcs despite user's evaluation
+            
+        width2narcs = decorated_custom_width2narcs
+    else:
+        width2narcs = default_width2narcs
 
     outer_arcs_positions = np.array(outer_arcs_positions).reshape(-1, )  # example: [0.1, 0.2]
     if np.any(outer_arcs_positions <= 0.0):

@@ -596,5 +596,5 @@ if __name__ == '__main__':
 
     # merge_maps(f'/sciclone/schism10/feiye/STOFS3D-v5/Inputs/v14/Parallel/Outputs/CUDEM_merged_thalwegs_1e6_single_fix_simple_sms_cleaned_32cores/*corrected_thalweg*.map', merged_fname=f'/sciclone/schism10/feiye/STOFS3D-v5/Inputs/v14/Parallel/Outputs/CUDEM_merged_thalwegs_1e6_single_fix_simple_sms_cleaned_32cores/total_corrected_thalwegs.map')
 
-    extract_quad_polygons(input_fname='/sciclone/schism10/Hgrid_projects/STOFS3D-V6/v17_subset/new8/coastal.map')
+    extract_quad_polygons(input_fname='/sciclone/schism10/Hgrid_projects/STOFS3D-v7/v18.3-s1_v1/lbnd+coast+levee.map')
     pass
