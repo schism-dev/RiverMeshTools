@@ -1422,6 +1422,7 @@ def make_river_map(
     cc_arcs = np.empty((len(thalwegs), 2), dtype=object)  # [, 0] is head, [, 1] is tail
     river_arcs = np.empty((len(thalwegs), max_nrow_arcs), dtype=object)  # for storing arcs, z field is cross-channel resolution
     river_arcs_extra = np.empty((len(thalwegs), max_nrow_arcs), dtype=object)  # for storing extra info in the z field
+    inner_arcs = np.empty((len(thalwegs), max_nrow_arcs), dtype=object)  # for storing inner arcs
     smoothed_thalwegs = [None] * len(thalwegs)
     redistributed_thalwegs_pre_correction = [None] * len(thalwegs)
     redistributed_thalwegs_after_correction = [None] * len(thalwegs)
@@ -1607,6 +1608,8 @@ def make_river_map(
                         bank_arcs_final[i, 0] = SMS_ARC(points=np.c_[line[:, 0], line[:, 1], z_centerline[:]], src_prj='cpp')
                     elif k == len(x_river_arcs)-1:  # right bank
                         bank_arcs_final[i, 1] = SMS_ARC(points=np.c_[line[:, 0], line[:, 1], z_centerline[:]], src_prj='cpp')
+                    else: # inner arcs, k == 0 or k == len(x_river_arcs)-1 are empty
+                        inner_arcs[i, k] = SMS_ARC(points=np.c_[line[:, 0], line[:, 1], z_centerline[:]], src_prj='cpp') 
                     # save river arcs
                     river_arcs[i, k] = SMS_ARC(points=np.c_[line[:, 0], line[:, 1], z_centerline[:]], src_prj='cpp')
                     # save extra info in the z field
@@ -1643,6 +1646,7 @@ def make_river_map(
         if any(river_arcs.flatten()):  # not all arcs are None
             SMS_MAP(arcs=river_arcs_extra.reshape((-1, 1))).writer(filename=f'{output_dir}/{output_prefix}river_arcs_extra.map')
             SMS_MAP(arcs=river_arcs.reshape((-1, 1))).writer(filename=f'{output_dir}/{output_prefix}river_arcs.map')
+            SMS_MAP(arcs=inner_arcs.reshape((-1, 1))).writer(filename=f'{output_dir}/{output_prefix}inner_arcs.map')
             SMS_MAP(arcs=bank_arcs.reshape((-1, 1))).writer(filename=f'{output_dir}/{output_prefix}bank.map')
             if i_pseudo_channel != 1:  # skip the following outputs if it is a pseudo channel
                 SMS_MAP(arcs=bank_arcs_raw.reshape((-1, 1))).writer(filename=f'{output_dir}/{output_prefix}bank_raw.map')
