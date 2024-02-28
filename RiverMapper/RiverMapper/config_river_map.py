@@ -30,7 +30,7 @@ class ConfigRiverMap():
     # also used by make_river_map()
     DEFAULT_i_DEM_cache = True
     DEFAULT_selected_thalweg = None
-    DEFAULT_river_threshold = (5, 600)
+    DEFAULT_river_threshold = (5, 600)  # used to be (16, 400) around the time of STOFS-3D-Atl v6 (schism git f10c3eab)
     DEFAULT_min_arcs = 3
     DEFAULT_width2narcs_option = 'regular'
     DEFAULT_custom_width2narcs = None

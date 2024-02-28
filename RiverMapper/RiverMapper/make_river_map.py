@@ -41,7 +41,7 @@ from RiverMapper.SMS import (
 )
 from RiverMapper.river_map_tif_preproc import Tif2XYZ, get_elev_from_tiles
 from RiverMapper.config_river_map import ConfigRiverMap
-from RiverMapper.util import cpp_crs
+from RiverMapper.util import cpp_crs, z_encoder
 
 # np.seterr(all='raise')  # Needs more attention, see Issue #1
 
@@ -203,32 +203,6 @@ def intersect(A,B,C,D):
 # ------------------------------------------------------------------
 # higher level functions for specific tasks involved in river map generation
 # ------------------------------------------------------------------
-
-def z_encoder(int_info:np.ndarray):
-    '''
-    encode information as 2-digit integers in z's decimal part
-    int_info: a 2-d integer array, each column is a list of integers to be encoded
-    '''
-
-    if np.any(int_info > 99) or np.any(int_info < 0):
-        raise ValueError('int_list must be positive and less than 100')
-
-    # the integer part is the number of integers in the list
-    n_info = int_info.shape[1]
-    if n_info> 6:
-        raise ValueError('int_info must not be more than 6 columns')
-
-    # convert int_info to string
-    str_info = np.apply_along_axis(''.join, axis=1, arr=np.char.zfill(int_info.astype(str), 2))
-    # add prefix to each row, which is the number of integers in the list
-    str_info = np.core.defchararray.add(f'{n_info}.', str_info)
-
-    encoded_float = str_info.astype(float)
-
-    return encoded_float
-
-def z_decoder(z):
-    pass
 
 def smooth_thalweg(line, ang_diff_shres=np.pi/2.4, nmax=100, smooth_coef=0.2):
     xs = line[:, 0]

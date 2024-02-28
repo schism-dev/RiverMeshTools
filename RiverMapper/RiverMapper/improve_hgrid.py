@@ -10,13 +10,14 @@ Also see other sample usages in the main function.
 """
 
 from pylib import schism_grid, grd2sms, proj_pts, read_schism_bpfile
+from pylib_essentials.schism_file import read_schism_hgrid_cached
 # pylib is a python library that handles many schism-related file manipulations by Dr. Zhengui Wang
 # , which can be installed by "pip install git+https://github.com/wzhengui/pylibs.git"
 import shutil
 import os
 import numpy as np
 from RiverMapper import improve_hgrid as original_file
-from RiverMapper.Hgrid_extended import find_nearest_nd, hgrid_basic, read_schism_hgrid_cached, get_inp, propogate_nd, compute_ie_area
+from RiverMapper.Hgrid_extended import find_nearest_nd, hgrid_basic, get_inp, propogate_nd, compute_ie_area
 from RiverMapper.SMS import SMS_MAP
 import pathlib
 import copy
@@ -639,18 +640,22 @@ if __name__ == "__main__":
     # # Sample usage
 
     # get arguments from command line
-    grid_file, skewness_threshold, area_threshold = cmd_line_interface()
+    # grid_file, skewness_threshold, area_threshold = cmd_line_interface()
 
     # or set arguments manually
-    # grid_file = '/sciclone/schism10/Hgrid_projects/OCSMesh/lower_res_renum.2dm'
-    # skewness_threshold = 30
-    # area_threshold = 5
+    grid_file = '/sciclone/schism10/feiye/STOFS3D-v7/Inputs/I11/Hgrid_pre_proc/v20.0.gr3'
+    skewness_threshold = 30
+    area_threshold = 5
 
     # read grid into schism_grid object
-    gd = read_schism_hgrid_cached(grid_file, overwrite_cache=False)
-    gd.proj(prj0='epsg:4326', prj1='esri:102008')
+    gd = schism_grid(grid_file)
+
+    # reproject to meters if necessary
+    # gd.proj(prj0='epsg:4326', prj1='esri:102008')
+
     # sanity check for illegal boundaries, in case of which this step will hang
     gd.compute_bnd()
+
     # improve grid quality
     improve_hgrid(gd, n_intersection_fix=0, area_threshold=area_threshold, skewness_threshold=skewness_threshold, nmax=4)
 
