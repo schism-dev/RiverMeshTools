@@ -1,5 +1,5 @@
 # RiverMapper: DEM-based meshing aid for compound flooding 
-![Watershed rivers](http://ccrm.vims.edu/yinglong/feiye/Public/RiverMapper_images/Intro.jpg)
+![Watershed rivers](Intro.jpg?raw=true)
 
 Note: this is not a mesh generator; instead, it only generates river arcs or polygons that can be fed to mesh generators.
 The purpose of the tool is to avoid manual labor of delineating watershed rivers, especially in continental-scale compound flood studies.
