@@ -1,1 +1,0 @@
-/sciclone/home/feiye/STOFS-3D-Atl-shadow-VIMS/Pre_processing/Grid/clip_autoarcs0.py

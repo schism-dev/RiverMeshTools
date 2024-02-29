@@ -144,11 +144,11 @@ class ConfigRiverMap():
         of a fixed width (in this case foot-to-foot width)
         '''
         return cls(
-            i_pseudo_channel = 1, pseudo_channel_width = 18,
-            nrow_pseudo_channel = 4, length_width_ratio = 50.0,
-            snap_point_reso_ratio = 0.2, snap_arc_reso_ratio = 0.2,
+            i_pseudo_channel = 1, pseudo_channel_width = 25,
+            nrow_pseudo_channel = 4, length_width_ratio = 80.0,
+            snap_point_reso_ratio = 0.1, snap_arc_reso_ratio = 0.1,
             i_smooth_banks = False, river_threshold = (18, 18), min_arcs = 4,
-            i_DiagnosticOutput = True,
+            i_DiagnosticOutput = True, n_clean_iter = 3,
         )
     
     @classmethod

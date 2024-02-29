@@ -9,7 +9,7 @@ the grid file can be in 2dm, gr3, or ll format
 Also see other sample usages in the main function.
 """
 
-from pylib import schism_grid, grd2sms, proj_pts, read_schism_bpfile
+from pylib import schism_grid, grd2sms, proj_pts, read_schism_bpfile, schism_bpfile
 from pylib_essentials.schism_file import read_schism_hgrid_cached
 # pylib is a python library that handles many schism-related file manipulations by Dr. Zhengui Wang
 # , which can be installed by "pip install git+https://github.com/wzhengui/pylibs.git"
@@ -513,6 +513,19 @@ def quality_check_hgrid(gd, outdir='./', area_threshold=None, skewness_threshold
         'small_ele': small_ele, 'skew_ele': skew_ele
     }
 
+def write_diagnostics(outdir=None, grid_quality=None):
+    print(f"Remaining small elements: {grid_quality['small_ele']}")
+    if len(grid_quality['small_ele']) > 0:
+        SMS_MAP(detached_nodes=np.c_[gd.xctr[grid_quality['small_ele']], gd.yctr[grid_quality['small_ele']], gd.yctr[grid_quality['small_ele']]*0]).writer(f'{outdir}/small_ele.map')
+        small_ele_bp = schism_bpfile(x=gd.xctr[grid_quality['small_ele']], y=gd.yctr[grid_quality['small_ele']])
+        small_ele_bp.write(f'{outdir}/small_ele.bp')
+
+    print(f"Remaining skew elements: {grid_quality['skew_ele']}")
+    if len(grid_quality['skew_ele']) > 0:
+        SMS_MAP(detached_nodes=np.c_[gd.xctr[grid_quality['skew_ele']], gd.yctr[grid_quality['skew_ele']], gd.yctr[grid_quality['skew_ele']]*0]).writer(f'{outdir}/skew_ele.map')
+        skew_ele_bp = schism_bpfile(x=gd.xctr[grid_quality['skew_ele']], y=gd.yctr[grid_quality['skew_ele']])
+        skew_ele_bp.write(f'{outdir}/skew_ele.bp')
+
 def improve_hgrid(gd, prj='esri:102008', skewness_threshold=30, area_threshold=5, load_bathy=False, n_intersection_fix=0, nmax=5):
     '''
     Fix small and skew elements and bad quads
@@ -538,13 +551,8 @@ def improve_hgrid(gd, prj='esri:102008', skewness_threshold=30, area_threshold=5
             print('\n -------------------------Done fixing invalid elements --------------------------------------------')
             break
         elif n_fix > nmax:  # maximum iteration reached, exit with leftovers
-            print(' --------------------------------------------Done fixing invalid elements,')
-            if len(grid_quality['small_ele']) > 0:
-                print(f"Remaining small elements: {grid_quality['small_ele']}")
-                SMS_MAP(detached_nodes=np.c_[gd.xctr[grid_quality['small_ele']], gd.yctr[grid_quality['small_ele']], gd.yctr[grid_quality['small_ele']]*0]).writer(f'{dirname}/small_ele.map')
-            if len(grid_quality['skew_ele']) > 0:
-                SMS_MAP(detached_nodes=np.c_[gd.xctr[grid_quality['small_ele']], gd.yctr[grid_quality['small_ele']], gd.yctr[grid_quality['small_ele']]*0]).writer(f'{dirname}/skew_ele.map')
-                print(f"Remaining skew elements: {grid_quality['skew_ele']}")
+            print(' ----------------------------- Done fixing invalid elements, but with leftovers ---------------------')
+            write_diagnostics(outdir=dirname, grid_quality=grid_quality)
             break
         else:  # fix targets
 
@@ -636,22 +644,24 @@ def improve_hgrid(gd, prj='esri:102008', skewness_threshold=30, area_threshold=5
     pass
 
 if __name__ == "__main__":
+    # Sample usage 
+    i_arg_parse = False
 
-    # # Sample usage
+    if i_arg_parse:  # get arguments from command line
+        grid_file, skewness_threshold, area_threshold = cmd_line_interface()
+        gd = schism_grid(grid_file)
+    else:  # or set arguments manually
+        grid_dir = '/sciclone/schism10/feiye/STOFS3D-v7/Inputs/I12/'
+        grid_file = f'{grid_dir}/hgrid.gr3'
+        skewness_threshold = 60
+        area_threshold = 5
+        gd = read_schism_hgrid_cached(grid_file)
+        # reproject to meters if necessary
+        gd.proj(prj0='epsg:4326', prj1='esri:102008')
 
-    # get arguments from command line
-    # grid_file, skewness_threshold, area_threshold = cmd_line_interface()
-
-    # or set arguments manually
-    grid_file = '/sciclone/schism10/feiye/STOFS3D-v7/Inputs/I11/Hgrid_pre_proc/v20.0.gr3'
-    skewness_threshold = 30
-    area_threshold = 5
-
-    # read grid into schism_grid object
-    gd = schism_grid(grid_file)
-
-    # reproject to meters if necessary
-    # gd.proj(prj0='epsg:4326', prj1='esri:102008')
+        grid_quality = quality_check_hgrid(gd, outdir=grid_dir, area_threshold=area_threshold, skewness_threshold=skewness_threshold)
+        write_diagnostics(outdir=grid_dir, grid_quality=grid_quality)
+        pass
 
     # sanity check for illegal boundaries, in case of which this step will hang
     gd.compute_bnd()
