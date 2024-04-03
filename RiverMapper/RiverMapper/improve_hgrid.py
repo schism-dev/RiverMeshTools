@@ -513,17 +513,23 @@ def quality_check_hgrid(gd, outdir='./', area_threshold=None, skewness_threshold
         'small_ele': small_ele, 'skew_ele': skew_ele
     }
 
-def write_diagnostics(outdir=None, grid_quality=None):
+def write_diagnostics(outdir=None, grid_quality=None, hgrid_ref=None):
+    '''hgrid_ref: reference hgrid, used to write diagnostic outputs,
+    , which can be in a different projection than the hgrid associated with grid_quality'''
+    
+    if not hasattr(hgrid_ref, 'xctr'):
+        hgrid_ref.compute_ctr()
+
     print(f"Remaining small elements: {grid_quality['small_ele']}")
     if len(grid_quality['small_ele']) > 0:
-        SMS_MAP(detached_nodes=np.c_[gd.xctr[grid_quality['small_ele']], gd.yctr[grid_quality['small_ele']], gd.yctr[grid_quality['small_ele']]*0]).writer(f'{outdir}/small_ele.map')
-        small_ele_bp = schism_bpfile(x=gd.xctr[grid_quality['small_ele']], y=gd.yctr[grid_quality['small_ele']])
+        SMS_MAP(detached_nodes=np.c_[hgrid_ref.xctr[grid_quality['small_ele']], hgrid_ref.yctr[grid_quality['small_ele']], hgrid_ref.yctr[grid_quality['small_ele']]*0]).writer(f'{outdir}/small_ele.map')
+        small_ele_bp = schism_bpfile(x=hgrid_ref.xctr[grid_quality['small_ele']], y=hgrid_ref.yctr[grid_quality['small_ele']])
         small_ele_bp.write(f'{outdir}/small_ele.bp')
 
     print(f"Remaining skew elements: {grid_quality['skew_ele']}")
     if len(grid_quality['skew_ele']) > 0:
-        SMS_MAP(detached_nodes=np.c_[gd.xctr[grid_quality['skew_ele']], gd.yctr[grid_quality['skew_ele']], gd.yctr[grid_quality['skew_ele']]*0]).writer(f'{outdir}/skew_ele.map')
-        skew_ele_bp = schism_bpfile(x=gd.xctr[grid_quality['skew_ele']], y=gd.yctr[grid_quality['skew_ele']])
+        SMS_MAP(detached_nodes=np.c_[hgrid_ref.xctr[grid_quality['skew_ele']], hgrid_ref.yctr[grid_quality['skew_ele']], hgrid_ref.yctr[grid_quality['skew_ele']]*0]).writer(f'{outdir}/skew_ele.map')
+        skew_ele_bp = schism_bpfile(x=hgrid_ref.xctr[grid_quality['skew_ele']], y=hgrid_ref.yctr[grid_quality['skew_ele']])
         skew_ele_bp.write(f'{outdir}/skew_ele.bp')
 
 def improve_hgrid(gd, prj='esri:102008', skewness_threshold=30, area_threshold=5, load_bathy=False, n_intersection_fix=0, nmax=5):
@@ -552,7 +558,7 @@ def improve_hgrid(gd, prj='esri:102008', skewness_threshold=30, area_threshold=5
             break
         elif n_fix > nmax:  # maximum iteration reached, exit with leftovers
             print(' ----------------------------- Done fixing invalid elements, but with leftovers ---------------------')
-            write_diagnostics(outdir=dirname, grid_quality=grid_quality)
+            write_diagnostics(outdir=dirname, grid_quality=grid_quality, gd_ref=gd)
             break
         else:  # fix targets
 
@@ -657,10 +663,11 @@ if __name__ == "__main__":
         area_threshold = 5
         gd = read_schism_hgrid_cached(grid_file)
         # reproject to meters if necessary
+        gd_ll = copy.deepcopy(gd)
         gd.proj(prj0='epsg:4326', prj1='esri:102008')
 
         grid_quality = quality_check_hgrid(gd, outdir=grid_dir, area_threshold=area_threshold, skewness_threshold=skewness_threshold)
-        write_diagnostics(outdir=grid_dir, grid_quality=grid_quality)
+        write_diagnostics(outdir=grid_dir, grid_quality=grid_quality, hgrid_ref=gd_ll)
         pass
 
     # sanity check for illegal boundaries, in case of which this step will hang
