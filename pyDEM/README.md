@@ -15,7 +15,7 @@ pip install git+https://github.com/wzhengui/pylibs.git
 2. pyDEM:
 
 ```bash
-pip install git+https://github.com/schism-dev/schism.git#subdirectory=src/Utility/Grid_Scripts/Compound_flooding/pyDEM
+pip install git+https://github.com/schism-dev/RiverMeshTools.git#subdirectory=pyDEM
 ```
 (You may need to install GDAL manually if the pip command failed)
 
