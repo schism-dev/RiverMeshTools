@@ -4,7 +4,7 @@ Scripts used for extracting thalwegs from DEMs.
 
 ---
 
-Installation (python 3.9 or above is recommended):
+Installation (python 3.9 or 3.10 is recommended):
 1. Utility library developed by Dr. Zhengui Wang:
      
 ```bash
