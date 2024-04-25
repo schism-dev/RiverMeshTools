@@ -9,8 +9,11 @@ the grid file can be in 2dm, gr3, or ll format
 Also see other sample usages in the main function.
 """
 
-from pylib import schism_grid, grd2sms, proj_pts, read_schism_bpfile, schism_bpfile
-from pylib_essentials.schism_file import read_schism_hgrid_cached
+from pylib import schism_grid
+from pylib import proj_pts, read_schism_bpfile, schism_bpfile
+
+from pylib_experimental.schism_file import cread_schism_hgrid
+    
 # pylib is a python library that handles many schism-related file manipulations by Dr. Zhengui Wang
 # , which can be installed by "pip install git+https://github.com/wzhengui/pylibs.git"
 import shutil
@@ -319,13 +322,13 @@ def reduce_bad_elements(
             print(f'found negative elements: {np.argwhere(gd.area<0.0)+1}')
             print(f'reverting to previous grid ...')
             if iDiagnosticOutputs:
-                grd2sms(gd, f'{pathlib.Path(output_fname).parent}/{pathlib.Path(output_fname).stem}.fix{n}.failed.2dm')
-                grd2sms(gd0, f'{pathlib.Path(output_fname).parent}/{pathlib.Path(output_fname).stem}.fix{n}.pre-failed.2dm')
+                gd.grd2sms(f'{pathlib.Path(output_fname).parent}/{pathlib.Path(output_fname).stem}.fix{n}.failed.2dm')
+                gd0.grd2sms(f'{pathlib.Path(output_fname).parent}/{pathlib.Path(output_fname).stem}.fix{n}.pre-failed.2dm')
                 print(f'final element areas: {np.sort(gd.area)}')
             gd = copy.deepcopy(gd0)
         else:
             if iDiagnosticOutputs:
-                grd2sms(gd, f'{pathlib.Path(output_fname).parent}/{pathlib.Path(output_fname).stem}.fix{n}.2dm')
+                gd.grd2sms(f'{pathlib.Path(output_fname).parent}/{pathlib.Path(output_fname).stem}.fix{n}.2dm')
             gd = hgrid_basic(gd)
             pass
 
@@ -334,7 +337,7 @@ def reduce_bad_elements(
     gd = hgrid_basic(gd)
     if output_fname is not None:
         if pathlib.Path(output_fname).suffix == '.2dm':
-            grd2sms(gd, output_fname)
+            gd.grd2sms(output_fname)
         elif pathlib.Path(output_fname).suffix in ['.gr3', 'll']:
             gd.save(output_fname)
         else:
@@ -434,7 +437,7 @@ def grid_element_relax(gd, target_points=None, niter=3, ntier=0, max_dist=50, mi
     gd = schism_grid(f'{wdir}/hgrid.spring.gr3')
     if output_fname is not None:
         if pathlib.Path(output_fname).suffix == '.2dm':
-            grd2sms(gd, output_fname)
+            gd.grd2sms(output_fname)
         elif pathlib.Path(output_fname).suffix in ['.gr3', 'll']:
             shutil.move(f'{wdir}/hgrid.spring.gr3', output_fname)
         else:
@@ -558,7 +561,7 @@ def improve_hgrid(gd, prj='esri:102008', skewness_threshold=30, area_threshold=5
             break
         elif n_fix > nmax:  # maximum iteration reached, exit with leftovers
             print(' ----------------------------- Done fixing invalid elements, but with leftovers ---------------------')
-            write_diagnostics(outdir=dirname, grid_quality=grid_quality, gd_ref=gd)
+            write_diagnostics(outdir=dirname, grid_quality=grid_quality, hgrid_ref=gd)
             break
         else:  # fix targets
 
@@ -567,20 +570,23 @@ def improve_hgrid(gd, prj='esri:102008', skewness_threshold=30, area_threshold=5
             print('\n ------------------- Splitting bad quads >')
             bp_name = f'{dirname}/bad_quad.bp'
             # split bad quads
-            gd.check_quads(angle_min=50,angle_max=130,fname=bp_name)
-            gd.split_quads(angle_min=50, angle_max=130)
+            bad_quad_idx = gd.check_quads(angle_min=50,angle_max=130,fname=bp_name)
+            if bad_quad_idx is not None and len(bad_quad_idx) > 0:
+                gd.split_quads(angle_min=50, angle_max=130)
+
+                # outputs from split quads
+                bad_quad_bp = read_schism_bpfile(fname=bp_name)
+                print(f'{bad_quad_bp.nsta} bad quads split')
+                if bad_quad_bp.nsta > 0:
+                    if iDiagnosticOutputs:
+                        new_gr3_name = f"{dirname}/hgrid_split_quads.gr3"
+                        gd.save(new_gr3_name)
+                        print(f'the updated hgrid is saved as {new_gr3_name}')
+                    # quality check again since gd is updated
+                    grid_quality = quality_check_hgrid(gd, outdir=dirname, area_threshold=area_threshold, skewness_threshold=skewness_threshold)['i_invalid_nodes']
+                    if i_target_nodes is None: continue
+
             gd.compute_all(fmt=1)
-            # outputs from split quads
-            bad_quad_bp = read_schism_bpfile(fname=bp_name)
-            print(f'{bad_quad_bp.nsta} bad quads split')
-            if bad_quad_bp.nsta > 0:
-                if iDiagnosticOutputs:
-                    new_gr3_name = f"{dirname}/hgrid_split_quads.gr3"
-                    gd.save(new_gr3_name)
-                    print(f'the updated hgrid is saved as {new_gr3_name}')
-                # quality check again since gd is updated
-                grid_quality = quality_check_hgrid(gd, outdir=dirname, area_threshold=area_threshold, skewness_threshold=skewness_threshold)['i_invalid_nodes']
-                if i_target_nodes is None: continue
 
             print('\n ----------------------------- include intersection relax points ----------------------')
             if n_fix <= n_intersection_fix:
@@ -644,12 +650,15 @@ def improve_hgrid(gd, prj='esri:102008', skewness_threshold=30, area_threshold=5
             gd.x, gd.y = gd_lon, gd_lat
 
     print('\n ------------------- Outputting final hgrid >')
-    grd2sms(gd, f'{dirname}/hgrid.2dm')
+    gd.grd2sms(f'{dirname}/hgrid.2dm')
     gd.save(f'{dirname}/hgrid.ll', fmt=1)
 
     pass
 
 if __name__ == "__main__":
+    gd = cread_schism_hgrid('/sciclone/schism10/feiye/STOFS3D-v7/Inputs/I16/hg.gr3')
+    gd.compute_bnd()
+
     # Sample usage 
     i_arg_parse = False
 
@@ -657,14 +666,18 @@ if __name__ == "__main__":
         grid_file, skewness_threshold, area_threshold = cmd_line_interface()
         gd = schism_grid(grid_file)
     else:  # or set arguments manually
-        grid_dir = '/sciclone/schism10/feiye/STOFS3D-v7/Inputs/I12/'
-        grid_file = f'{grid_dir}/hgrid.gr3'
+        grid_dir = '/sciclone/schism10/Hgrid_projects/STOFS3D-v8/v20p2s2v2/'
+        grid_file = f'{grid_dir}/v20.2-s2_v2.gr3'
+
         skewness_threshold = 60
         area_threshold = 5
-        gd = read_schism_hgrid_cached(grid_file)
-        # reproject to meters if necessary
+        gd = schism_grid(grid_file)
+
+        # reproject to lon/lat if necessary
         gd_ll = copy.deepcopy(gd)
-        gd.proj(prj0='epsg:4326', prj1='esri:102008')
+        gd_ll.proj(prj0='esri:102008', prj1='epsg:4326')
+        # reproject to meters if necessary
+        # gd.proj(prj0='epsg:4326', prj1='esri:102008')
 
         grid_quality = quality_check_hgrid(gd, outdir=grid_dir, area_threshold=area_threshold, skewness_threshold=skewness_threshold)
         write_diagnostics(outdir=grid_dir, grid_quality=grid_quality, hgrid_ref=gd_ll)

@@ -27,14 +27,18 @@ def silentremove(filenames):
 
 def z_encoder(int_info:np.ndarray):
     '''
-    Encode information as 2-digit integers in z's decimal part
-    int_info is a NxM integer array,
+    Encode information as 2-digit integers in z's decimal part,
+
+    "int_info" is a NxM integer array,
     where N is the number of nodes along an arc,
     and M is the number of pieces of information.
+
     Each piece of information is encoded as a two-digit integer (0-99).
     For example, the first column can be the number of cross-channel nodes
     (number of cross-channel divisions + 1).
     A maximum of 6 integers are allowed, i.e., M <= 6
+
+    The integer part of z records the number of pieces of information.
     '''
 
     if np.any(int_info > 99) or np.any(int_info < 0):
@@ -75,7 +79,7 @@ def z_decoder(z):
     # Convert a single float to a NumPy array
     if isinstance(z, float):
         z_array = np.array([z])
-    elif isinstance(z_array, np.ndarray) and z_array.dtype == float:
+    elif isinstance(z, np.ndarray) and z.dtype == float:
         z_array = z
     else:
         raise TypeError('z_input must be a float or an n x 1 NumPy array of floats')

@@ -506,11 +506,11 @@ def default_width2narcs(width, min_arcs=3, opt='regular'):
 
 def set_inner_arc_position(nrow_arcs, type='regular'):
     if callable(type):  # user-defined function
-        arc_position = type(nrow_arcs)
+        inner_arc_position = type(nrow_arcs)
     elif type == 'regular':  # evenly spaced inner arcs
-        arc_position = np.linspace(0.0, 1.0, nrow_arcs)
+        inner_arc_position = np.linspace(0.0, 1.0, nrow_arcs)
     elif type == 'fake': # default levee
-        arc_position = np.array([0.0, 6.75, 11.25, 18.0]) / 18
+        inner_arc_position = np.array([0.0, 6.75, 11.25, 18.0]) / 18
     elif type == 'toward_center': # denser near center
         pass
     elif type == 'toward_banks': # denser near banks
@@ -518,7 +518,7 @@ def set_inner_arc_position(nrow_arcs, type='regular'):
     else:
         raise ValueError(f'unknown inner arc type: {type}')
 
-    return arc_position
+    return inner_arc_position
 
 def points2GeoDataFrame(points: np.ndarray, crs='epsg:4326'):
     '''
@@ -1265,7 +1265,7 @@ def make_river_map(
             snap_arc_reso_ratio = min_snap_ratio
 
     # maximum number of arcs to resolve a channel (including bank arcs, inner arcs and outer arcs)
-    max_nrow_arcs = width2narcs(river_threshold[-1], min_arcs=min_arcs, opt=width2narcs_option) + 2 * outer_arcs_positions.size
+    max_nrow_arcs = width2narcs(4 * river_threshold[-1], min_arcs=min_arcs, opt=width2narcs_option) + 2 * outer_arcs_positions.size  # 4*river_threshold[-1] to be safe, since 1.1 * river_threshold[-1] is the search length
     # refine toward endpoints to better fit intersections
     # ---------------------- end pre-processing some inputs -------------------------
 
@@ -1445,7 +1445,7 @@ def make_river_map(
             quality_controlled = True  # (Case 1) always true for pseudo channel
             x_banks_left, y_banks_left, x_banks_right, y_banks_right, _, width = \
                 get_fake_banks(thalweg, const_bank_width=pseudo_channel_width)
-            arc_position = set_inner_arc_position(nrow_arcs=nrow_pseudo_channel, type='fake')
+            inner_arc_position = set_inner_arc_position(nrow_arcs=nrow_pseudo_channel, type='fake')
         else:  # real channels, try to find banks first
             # update thalweg info
             elevs = get_elev_from_tiles(thalweg[:, 0],thalweg[:, 1], S_list, scale=elev_scale)
@@ -1509,11 +1509,11 @@ def make_river_map(
                     continue
                 elif i_pseudo_channel == 2:
                     print(f'{mpi_print_prefix} warning: banks not found for thalweg {i+1}, implementing a pseudo channel of width {pseudo_channel_width} ...')
-                    quality_controlled = True  # (Case 2): Real river but no banks found, implement a pseudo channel
+                    quality_controlled = True  # (Case 2): Real river but no banks found, implement a pseudo channel as a fallback
                     x_banks_left, y_banks_left, x_banks_right, y_banks_right, _, width = \
                         get_fake_banks(thalweg, const_bank_width=pseudo_channel_width)
                     this_nrow_arcs = nrow_pseudo_channel
-                    arc_position = set_inner_arc_position(nrow_arcs=nrow_pseudo_channel, type='fake')
+                    inner_arc_position = set_inner_arc_position(nrow_arcs=nrow_pseudo_channel, type='fake')
             else:  # normal case: touch-ups on the two banks
                 # nudge banks
                 x_banks_left, y_banks_left = nudge_bank(thalweg, perp+np.pi, x_banks_left, y_banks_left, dist=nudge_ratio*0.5*np.mean(width))
@@ -1536,12 +1536,12 @@ def make_river_map(
 
                 # make inner arcs between two banks
                 this_nrow_arcs = min(max_nrow_arcs, width2narcs(np.mean(width), min_arcs=min_arcs, opt=width2narcs_option))
-                arc_position = set_inner_arc_position(nrow_arcs=this_nrow_arcs, type='regular')
+                inner_arc_position = set_inner_arc_position(nrow_arcs=this_nrow_arcs, type='regular')
             # end if degenerate case
         # end if pseudo channel or real river arcs
 
         # ------------------------- assemble arcs ---------------------------
-        arc_position = np.r_[-outer_arcs_positions, arc_position, 1.0+outer_arcs_positions].reshape(-1, 1)
+        arc_position = np.r_[sorted(-outer_arcs_positions), inner_arc_position, 1.0+outer_arcs_positions].reshape(-1, 1)
         x_river_arcs = x_banks_left.reshape(1, -1) + np.matmul(arc_position, (x_banks_right-x_banks_left).reshape(1, -1))
         y_river_arcs = y_banks_left.reshape(1, -1) + np.matmul(arc_position, (y_banks_right-y_banks_left).reshape(1, -1))
         z_centerline = width/(this_nrow_arcs-1)  # record cross-channel (cc) resolution at each thalweg point
@@ -1558,9 +1558,10 @@ def make_river_map(
                 print(f'{mpi_print_prefix} warning: thalweg {i+1} failed quality check, falling back to pseudo channel ...')
                 x_banks_left, y_banks_left, x_banks_right, y_banks_right, _, width = \
                     get_fake_banks(thalweg, const_bank_width=pseudo_channel_width)
-                # re-assemble arcs
+                # re-assemble arcs with pseudo channel
                 this_nrow_arcs = nrow_pseudo_channel
-                arc_position = set_inner_arc_position(nrow_arcs=nrow_pseudo_channel, type='fake')
+                inner_arc_position = set_inner_arc_position(nrow_arcs=nrow_pseudo_channel, type='fake')
+                arc_position = np.r_[sorted(-outer_arcs_positions), inner_arc_position, 1.0+outer_arcs_positions].reshape(-1, 1)
                 x_river_arcs = x_banks_left.reshape(1, -1) + np.matmul(arc_position, (x_banks_right-x_banks_left).reshape(1, -1))
                 y_river_arcs = y_banks_left.reshape(1, -1) + np.matmul(arc_position, (y_banks_right-y_banks_left).reshape(1, -1))
                 z_centerline = pseudo_channel_width/(this_nrow_arcs-1)  # update cross-channel (cc) resolution at each thalweg point
@@ -1584,9 +1585,11 @@ def make_river_map(
                         bank_arcs_final[i, 1] = SMS_ARC(points=np.c_[line[:, 0], line[:, 1], z_centerline[:]], src_prj='cpp')
                     else: # inner arcs, k == 0 or k == len(x_river_arcs)-1 are empty
                         inner_arcs[i, k] = SMS_ARC(points=np.c_[line[:, 0], line[:, 1], z_centerline[:]], src_prj='cpp') 
+
                     # save river arcs
                     river_arcs[i, k] = SMS_ARC(points=np.c_[line[:, 0], line[:, 1], z_centerline[:]], src_prj='cpp')
-                    # save extra info in the z field
+
+                    # save extra information in the z field
                     z_info = np.c_[  # at most 6 pieces of info are allowed to be saved
                         np.ones(x_river_arc.shape, dtype=int) * this_nrow_arcs,  # number of along-channel arcs
                         (np.zeros(x_river_arc.shape) + (k==0)+(k==len(x_river_arcs)-1)).astype(bool).astype(int) # if this is an outer-most arc

@@ -1,7 +1,7 @@
 """
 This script provides a class to configure the parameters of make_river_map.
 
-Parameter presets are also provided  as class methods for different usage scenarios.
+Parameter presets are also provided as class methods for different usage scenarios.
 """
 
 # global variables
@@ -77,7 +77,7 @@ class ConfigRiverMap():
         pseudo_channel_width = DEFAULT_pseudo_channel_width,
         nrow_pseudo_channel = DEFAULT_nrow_pseudo_channel,
     ):
-        # see a description of the parameters in the function make_river_map()
+        # see a description of the parameters at the beginning of the function make_river_map() in make_river_map.py
         self.optional = {
             'i_DEM_cache': i_DEM_cache,
             'selected_thalweg': selected_thalweg,
@@ -104,7 +104,7 @@ class ConfigRiverMap():
 
     @classmethod
     def LooselyFollowRivers(cls):
-        '''Small-scale river curvatures may not be exactly followed,
+        '''Small-scale river meanders may not be exactly followed,
         but channel connectivity is still preserved.'''
         return cls(length_width_ratio = 30.0)
 
@@ -140,8 +140,8 @@ class ConfigRiverMap():
     def Levees(cls):
         '''
         Expand all thalwegs (in this case levee centerlines)
-        to channels (in this case levees with two feet and a flat top)
-        of a fixed width (in this case foot-to-foot width)
+        to channels (in this case levees with a wider base and a narrower flat crown, i.e., 4 points in the cross-section)
+        of a fixed width (in this case levee base width)
         '''
         return cls(
             i_pseudo_channel = 1, pseudo_channel_width = 25,
@@ -152,14 +152,13 @@ class ConfigRiverMap():
         )
     
     @classmethod
-    def STOFS_3D_Atlantic(cls):
+    def STOFS_3D_Atlantic_v7(cls):
         '''
         Settings for the STOFS 3D Atlantic domain
         '''
         return cls(
-            length_width_ratio = 20.0,
-            river_threshold = (5, 400),
-            width2narcs_option = 'insensitive',
+            length_width_ratio = 30.0,
+            river_threshold = (16, 600),
+            n_clean_iter = 3,
             i_DiagnosticOutput = True,
         )
-
