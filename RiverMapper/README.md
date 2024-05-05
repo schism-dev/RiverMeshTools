@@ -1,8 +1,14 @@
 # RiverMapper: DEM-based meshing aid for compound flooding 
 ![Watershed rivers](Intro.jpg?raw=true)
 
-Note: this is not a mesh generator; instead, it only generates river arcs or polygons that can be fed to mesh generators.
-The purpose of the tool is to avoid manual labor of delineating watershed rivers, especially in continental-scale compound flood studies.
+Note: 
+* This is not a mesh generator; instead, it only generates river arcs or polygons that can be fed to mesh generators. The main purpose of the tool is to avoid manual labor of delineating watershed rivers, especially in continental-scale compound flood studies.
+* This tool is independent from RiverMeshTools/pyDEM. The requied 1D river network can be any reasonable approximations of the river positions, these may include:
+  - thalwegs extracted by RiverMeshTools/pyDEM or similar packages, as well as tools such as ArcGIS and QGIS with similar functions.
+  - existing hydrological products such as the hydrofabric from [National Hydrograph Dataset](https://www.epa.gov/waterdata/nhdplus-national-hydrography-dataset-plus) and [National Water Model](https://water.noaa.gov/about/nwm).
+  - manually drawn flow lines for small applications.
+  - 
+  The positions of the 1D streams do not need to align precisely with the thalweg; the tool utilizes DEMs (Digital Elevation Models) to accurately locate the thalweg positions within a search range determined by the local river width.
 
 ## Installation 
 Python 3.9 or above is recommended
