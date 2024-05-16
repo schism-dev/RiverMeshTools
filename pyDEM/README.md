@@ -1,6 +1,9 @@
 ## pyDEM
 
-Scripts used for extracting thalwegs from DEMs.
+This tool extracts thalwegs from DEMs through the following steps: 1) Filling depression, 2) Calculating flow direction, 3) Calculating flow accumulation, and finally select the DEM cells with flow accumulations larger than a user-specified threshold.
+
+This first step depends on [richdem](https://pypi.org/project/richdem/) to fill depression. The algorithm used is "Priority-Flood+Epsilon" from 
+"C Barnes, R., Lehman, C., Mulla, D., 2014. Priority-flood: An optimal depression-filling and watershed-labeling algorithm for digital elevation models. Computers & Geosciences 62, 117–127." [doi:10.1016/j.cageo.2013.04.024](https://doi.org/10.1016/j.cageo.2013.04.024).
 
 ---
 
