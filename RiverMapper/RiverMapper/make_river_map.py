@@ -200,6 +200,20 @@ def ccw(A,B,C):
 def intersect(A,B,C,D):
     return ccw(A,C,D) != ccw(B,C,D) and ccw(A,B,C) != ccw(A,B,D)
 
+def gdf2arclist(gdf):
+    uu = gdf.unary_union
+    if uu.is_empty:
+        print('Warning: No arcs left after cleaning')
+        return []
+    elif uu.geom_type == 'LineString':
+        print('Warning: Only one arc left after cleaning')
+        return [uu]
+    elif uu.geom_type == 'MultiLineString':
+        arcs = [arc for arc in uu.geoms]
+    else:
+        raise TypeError('Unexpected geometry type after cleaning')
+    return arcs
+
 # ------------------------------------------------------------------
 # higher level functions for specific tasks involved in river map generation
 # ------------------------------------------------------------------
@@ -759,11 +773,14 @@ def snap_points_to_lines(arc_points, snap_arc_reso):
     dists = find_nearest_distances_approx(points[:, :2], segs, tree, n_nearest=min(30, n_seg))  # 30 adjacent segs is enough for most cases
     # dists is of shape (n_points, n_nearest)
     dists = np.where(dists == 0, np.nan, dists)  # ignore zero distance, i.e., a point is a segment's endpoint
-                                                # the real 0 point-seg distance should not exist by this point due to previous unary_union
-    dists = np.nanmin(dists, axis=1)  # the smallest non-zero distance of each row is the distance from that point to the nearest segment
 
+    dists = np.nanmin(dists, axis=1)  # the smallest non-zero distance of each row is the distance from that point to the nearest segment
+    # nan is allowed in dists, because dists >= snap_arc_reso will be used to identify valid points
     target_pt_idx = dists >= snap_arc_reso  # identify valid points, which are not too close to any segment
-    arc_points.snap_to_points(points[target_pt_idx])  # snap to the valid points, i.e., removing the invalid points
+    if not any(target_pt_idx):
+        print('warning: all points are too close to segments, no snapping is performed')
+    else:
+        arc_points.snap_to_points(points[target_pt_idx])  # snap to the valid points, i.e., removing the invalid points
 
     return arc_points
 
@@ -934,15 +951,17 @@ def clean_arcs(arcs, snap_point_reso_ratio, snap_arc_reso_ratio, n_clean_iter=5)
             break
         arc_points.update_coords(xyz)
         arcs_gdf = gpd.GeoDataFrame({'index': range(len(arcs)),'geometry': arc_points.geom_list})
-        arcs = [arc for arc in arcs_gdf.geometry.unary_union.geoms]
-
+        
+        arcs = gdf2arclist(arcs_gdf)
+        
         # points close to lines
         ratio2 = snap_arc_reso_ratio * pratio
         print(f'Snapping points close to lines: ratio2 = {ratio2}')
         arc_points = Geoms_XY(geom_list=arcs, crs='epsg:4326', add_z=True)
         arc_points = snap_points_to_lines(arc_points, snap_arc_reso=arc_points.xy[:, -1]*ratio2)
         arcs_gdf = gpd.GeoDataFrame({'index': range(len(arcs)),'geometry': arc_points.geom_list})
-        arcs = [arc for arc in arcs_gdf.geometry.unary_union.geoms]
+
+        arcs = gdf2arclist(arcs_gdf)
 
     if i > len(progressive_ratio):
         print(f'warning: cleaning terminated prematurely after {i} iterations')
@@ -1335,7 +1354,7 @@ def make_river_map(
     print(f'{mpi_print_prefix} Dry run')
 
     thalweg_endpoints_width = np.empty((len(thalwegs)*2, 1), dtype=float); thalweg_endpoints_width.fill(np.nan)
-    thalwegs_neighbors = np.empty((len(thalwegs), 2), dtype=object)  # [, 0] is head, [, 1] is tail
+    # thalwegs_neighbors = np.empty((len(thalwegs), 2), dtype=object)  # [, 0] is head, [, 1] is tail
     thalweg_widths = [None] * len(thalwegs)
     valid_thalwegs = [True] * len(thalwegs)
     original_banks = [None] * len(thalwegs) * 2
@@ -1391,16 +1410,23 @@ def make_river_map(
     # ------------------------- Wet run ---------------------------
     # initialize some lists and arrays
     bank_arcs = np.empty((len(thalwegs), 2), dtype=object) # left bank and right bank for each thalweg
-    bank_arcs_raw = np.empty((len(thalwegs), 2), dtype=object)
+    # bank_arcs_raw = np.empty((len(thalwegs), 2), dtype=object)
     bank_arcs_final = np.empty((len(thalwegs), 2), dtype=object)
+
     cc_arcs = np.empty((len(thalwegs), 2), dtype=object)  # [, 0] is head, [, 1] is tail
-    river_arcs = np.empty((len(thalwegs), max_nrow_arcs), dtype=object)  # for storing arcs, z field is cross-channel resolution
-    river_arcs_extra = np.empty((len(thalwegs), max_nrow_arcs), dtype=object)  # for storing extra info in the z field
     inner_arcs = np.empty((len(thalwegs), max_nrow_arcs), dtype=object)  # for storing inner arcs
+
+    # river_arcs is the main river arc output, because it has cross-channel resolution which is a basic requirement for cleaning
+    river_arcs = np.empty((len(thalwegs), max_nrow_arcs), dtype=object)  # z field is cross-channel resolution
+    # the following river_arcs_* are auxiliary outputs
+    river_arcs_z = np.empty((len(thalwegs), max_nrow_arcs), dtype=object)  # for storing elevation in the z field
+    river_arcs_extra = np.empty((len(thalwegs), max_nrow_arcs), dtype=object)  # for storing extra info in the z field
+
     smoothed_thalwegs = [None] * len(thalwegs)
     redistributed_thalwegs_pre_correction = [None] * len(thalwegs)
     redistributed_thalwegs_after_correction = [None] * len(thalwegs)
     corrected_thalwegs = [None] * len(thalwegs)
+
     centerlines = [None] * len(thalwegs)
     # thalwegs_cc_reso = [None] * len(thalwegs)
     final_thalwegs = [None] * len(thalwegs)
@@ -1544,7 +1570,7 @@ def make_river_map(
         arc_position = np.r_[sorted(-outer_arcs_positions), inner_arc_position, 1.0+outer_arcs_positions].reshape(-1, 1)
         x_river_arcs = x_banks_left.reshape(1, -1) + np.matmul(arc_position, (x_banks_right-x_banks_left).reshape(1, -1))
         y_river_arcs = y_banks_left.reshape(1, -1) + np.matmul(arc_position, (y_banks_right-y_banks_left).reshape(1, -1))
-        z_centerline = width/(this_nrow_arcs-1)  # record cross-channel (cc) resolution at each thalweg point
+        cross_channel_reso = width/(this_nrow_arcs-1)  # record cross-channel (cc) resolution at each thalweg point
         for k, line in enumerate([np.c_[x_banks_left, y_banks_left], np.c_[x_banks_right, y_banks_right]]):
             bank_arcs[i, k] = SMS_ARC(points=np.c_[line[:, 0], line[:, 1]], src_prj='cpp')
 
@@ -1564,7 +1590,7 @@ def make_river_map(
                 arc_position = np.r_[sorted(-outer_arcs_positions), inner_arc_position, 1.0+outer_arcs_positions].reshape(-1, 1)
                 x_river_arcs = x_banks_left.reshape(1, -1) + np.matmul(arc_position, (x_banks_right-x_banks_left).reshape(1, -1))
                 y_river_arcs = y_banks_left.reshape(1, -1) + np.matmul(arc_position, (y_banks_right-y_banks_left).reshape(1, -1))
-                z_centerline = pseudo_channel_width/(this_nrow_arcs-1)  # update cross-channel (cc) resolution at each thalweg point
+                width_info = pseudo_channel_width/(this_nrow_arcs-1)  # update cross-channel (cc) resolution at each thalweg point
                 quality_controlled = True  # Case 4: real river, banks found in the previous step but with bad quality, falling back to pseudo channel
             else:
                 print(f'{mpi_print_prefix} warning: thalweg {i+1} failed quality check, skipping ...')
@@ -1575,20 +1601,25 @@ def make_river_map(
             for k, [x_river_arc, y_river_arc] in enumerate(zip(x_river_arcs, y_river_arcs)):
                 line = np.c_[x_river_arc, y_river_arc]
                 if len(line) > 0:
-                    # snap vertices too close to each other; probably not necessary
-                    line = snap_vertices(line, z_centerline * snap_point_reso_ratio)  # optional: thalweg_resolution*0.75
+                    # snap vertices too close to each other;
+                    # although there will be a final cleanup, this is necessary because it make the intersection cleaner.
+                    line = snap_vertices(line, cross_channel_reso * snap_point_reso_ratio)  # optional: thalweg_resolution*0.75
                     # ----------Save-------
                     # save final bank arcs
                     if k == 0:  # left bank
-                        bank_arcs_final[i, 0] = SMS_ARC(points=np.c_[line[:, 0], line[:, 1], z_centerline[:]], src_prj='cpp')
+                        bank_arcs_final[i, 0] = SMS_ARC(points=np.c_[line[:, 0], line[:, 1], cross_channel_reso[:]], src_prj='cpp')
                     elif k == len(x_river_arcs)-1:  # right bank
-                        bank_arcs_final[i, 1] = SMS_ARC(points=np.c_[line[:, 0], line[:, 1], z_centerline[:]], src_prj='cpp')
+                        bank_arcs_final[i, 1] = SMS_ARC(points=np.c_[line[:, 0], line[:, 1], cross_channel_reso[:]], src_prj='cpp')
                     else: # inner arcs, k == 0 or k == len(x_river_arcs)-1 are empty
-                        inner_arcs[i, k] = SMS_ARC(points=np.c_[line[:, 0], line[:, 1], z_centerline[:]], src_prj='cpp') 
+                        inner_arcs[i, k] = SMS_ARC(points=np.c_[line[:, 0], line[:, 1], cross_channel_reso[:]], src_prj='cpp') 
 
-                    # save river arcs
-                    river_arcs[i, k] = SMS_ARC(points=np.c_[line[:, 0], line[:, 1], z_centerline[:]], src_prj='cpp')
-
+                    # save river arcs, these are not subject to cleaning, thus keeping the original pairing
+                    river_arcs[i, k] = SMS_ARC(points=np.c_[line[:, 0], line[:, 1], cross_channel_reso[:]], src_prj='cpp')
+                    # save elevation in the z field
+                    elevs = get_elev_from_tiles(line[:, 0],line[:, 1], S_list, scale=elev_scale)
+                    if elevs is None:
+                        raise ValueError(f"{mpi_print_prefix} error: some elevs not found on river arc {i}, {k} ...")
+                    river_arcs_z[i, k] = SMS_ARC(points=np.c_[line[:, 0], line[:, 1], elevs], src_prj='cpp', proj_z=False)
                     # save extra information in the z field
                     z_info = np.c_[  # at most 6 pieces of info are allowed to be saved
                         np.ones(x_river_arc.shape, dtype=int) * this_nrow_arcs,  # number of along-channel arcs
@@ -1605,7 +1636,7 @@ def make_river_map(
                     k1 = int(len(x_river_arcs)/2 - 1)
                     k2 = int(len(x_river_arcs)/2)
                     line = np.c_[(x_river_arcs[k1]+x_river_arcs[k2])/2, (y_river_arcs[k1]+y_river_arcs[k2])/2]
-                centerlines[i] = SMS_ARC(points=np.c_[line[:, 0], line[:, 1], z_centerline[:]], src_prj='cpp')
+                centerlines[i] = SMS_ARC(points=np.c_[line[:, 0], line[:, 1], cross_channel_reso[:]], src_prj='cpp')
 
             if len(x_river_arcs) > 0:
                 # assemble cross-channel arcs
@@ -1613,7 +1644,7 @@ def make_river_map(
                     cc_arcs[i, j] = SMS_ARC(points=np.c_[
                         x_river_arcs[:, :][:, j],
                         y_river_arcs[:, :][:, j],
-                        np.tile(z_centerline[:][j], arc_position.size)
+                        np.tile(cross_channel_reso[:][j], arc_position.size)
                     ], src_prj='cpp')
 
     # end loop i, enumerating each thalweg
@@ -1621,12 +1652,13 @@ def make_river_map(
     # -----------------------------------diagnostic outputs ----------------------------
     if i_DiagnosticOutput:
         if any(river_arcs.flatten()):  # not all arcs are None
-            SMS_MAP(arcs=river_arcs_extra.reshape((-1, 1))).writer(filename=f'{output_dir}/{output_prefix}river_arcs_extra.map')
             SMS_MAP(arcs=river_arcs.reshape((-1, 1))).writer(filename=f'{output_dir}/{output_prefix}river_arcs.map')
+            SMS_MAP(arcs=river_arcs_z.reshape((-1, 1))).writer(filename=f'{output_dir}/{output_prefix}river_arcs_z.map')
+            SMS_MAP(arcs=river_arcs_extra.reshape((-1, 1))).writer(filename=f'{output_dir}/{output_prefix}river_arcs_extra.map')
             SMS_MAP(arcs=inner_arcs.reshape((-1, 1))).writer(filename=f'{output_dir}/{output_prefix}inner_arcs.map')
             SMS_MAP(arcs=bank_arcs.reshape((-1, 1))).writer(filename=f'{output_dir}/{output_prefix}bank.map')
             if i_pseudo_channel != 1:  # skip the following outputs if it is a pseudo channel
-                SMS_MAP(arcs=bank_arcs_raw.reshape((-1, 1))).writer(filename=f'{output_dir}/{output_prefix}bank_raw.map')
+                # SMS_MAP(arcs=bank_arcs_raw.reshape((-1, 1))).writer(filename=f'{output_dir}/{output_prefix}bank_raw.map')
                 SMS_MAP(arcs=cc_arcs.reshape((-1, 1))).writer(filename=f'{output_dir}/{output_prefix}cc_arcs.map')
                 SMS_MAP(arcs=smoothed_thalwegs).writer(filename=f'{output_dir}/{output_prefix}smoothed_thalweg.map')
                 SMS_MAP(arcs=redistributed_thalwegs_pre_correction).writer(filename=f'{output_dir}/{output_prefix}redist_thalweg_pre_correction.map')
@@ -1637,11 +1669,9 @@ def make_river_map(
 
     del smoothed_thalwegs[:], redistributed_thalwegs_pre_correction[:]
     del redistributed_thalwegs_after_correction[:], corrected_thalwegs[:]
-    del bank_arcs, bank_arcs_raw, smoothed_thalwegs
-    del redistributed_thalwegs_pre_correction, redistributed_thalwegs_after_correction, corrected_thalwegs
 
     # ------------------------- Clean up and finalize ---------------------------
-    # assemble arcs groups for cleaning
+    # assemble arcs groups for cleaning, use river arcs with cross-channel resolution as a base of cleaning threshold
     arc_groups = [arc for river in river_arcs for arc in river if arc is not None]  # river arcs are always included
     if i_close_poly:
         arc_groups += [arc for river in cc_arcs for arc in river if arc is not None]  # one cc (cross-channel) arc at each end of each river
@@ -1669,7 +1699,6 @@ def make_river_map(
         SMS_MAP(arcs=final_thalwegs).writer(filename=f'{output_dir}/{output_prefix}final_thalweg.map')
         del final_thalwegs[:]; del final_thalwegs
         SMS_MAP(arcs=bank_arcs_final.reshape((-1, 1))).writer(filename=f'{output_dir}/{output_prefix}bank_final.map')
-        del bank_arcs_final
 
         if len(total_arcs_cleaned) > 0:
             # SMS format
@@ -1680,12 +1709,7 @@ def make_river_map(
             ).to_file(filename=f'{output_dir}/{output_prefix}total_arcs.shp', driver="ESRI Shapefile")
 
         if i_OCSMesh:
-            # cleaned_river_arcs = clean_river_arcs_for_ocsmesh(river_arcs=river_arcs, total_arcs=total_arcs_cleaned)
-            # del river_arcs
-            # total_river_outline_polys = generate_river_outline_polys(river_arcs=cleaned_river_arcs)
-            # del cleaned_river_arcs
             total_river_outline_polys = generate_river_outline_polys(river_arcs=river_arcs)
-            del river_arcs
 
             if len(total_river_outline_polys) > 0:
                 gpd.GeoDataFrame(
@@ -1704,7 +1728,6 @@ def make_river_map(
         print(f'{mpi_print_prefix} Warning: total_sms_arcs_cleaned empty, skip writing to *.map')
 
     del total_arcs_cleaned[:]; del total_arcs_cleaned
-
 
 if __name__ == "__main__":
     pass

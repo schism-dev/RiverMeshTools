@@ -64,6 +64,7 @@ def merge_outputs(output_dir):
 
     # for feeder channels, "this_nrow_arcs" is saved as z values in the map file
     merge_maps(f'{output_dir}/*river_arcs_extra.map', merged_fname=f'{output_dir}/total_river_arcs_extra.map')
+    merge_maps(f'{output_dir}/*river_arcs_z.map', merged_fname=f'{output_dir}/total_river_arcs_z.map')
 
     total_centerlines = merge_maps(f'{output_dir}/*centerlines.map', merged_fname=f'{output_dir}/total_centerlines.map')
     merge_maps(f'{output_dir}/*bank_final*.map', merged_fname=f'{output_dir}/total_banks_final.map')
@@ -235,6 +236,7 @@ def river_map_mpi_driver(
     time_all_groups_start = time.time()
 
     for i, (my_group_id, my_tile_group, my_tile_group_thalwegs) in enumerate(zip(my_group_ids, my_tile_groups, my_tile_groups_thalwegs)):
+        # if i > 10: continue  # for testing
         time_this_group_start = time.time()
         print(f'Rank {rank}: Group {i} (global: {my_group_id}) started ...')
         # update some parameters in the config file

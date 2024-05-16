@@ -232,6 +232,15 @@ def merge_maps(mapfile_glob_str, merged_fname):
 class SMS_ARC():
     '''class for manipulating arcs in SMS maps'''
     def __init__(self, points=None, node_idx=None, src_prj=None, dst_prj='epsg:4326', proj_z=True):
+        """
+        points: 2D array of shape (n_points, 3) or (n_points, 2)
+        node_idx: 1D array, normally the first and last points of the arc
+        proj_z: whether to treate z values as a measure on the 2D-plane and project it to dst_prj
+          note: z values, i.e., points[:, 2], are used to store information of the arc,
+          e.g., width (needs projection to be meaningful in the new coordinate system)
+                or elevation (no need to project because it is a measure in the vertical dimension)
+        """
+
         # self.isDummy = (len(points) == 0)
         if node_idx is None:
             node_idx = [0, -1]
@@ -596,5 +605,5 @@ if __name__ == '__main__':
 
     # merge_maps(f'/sciclone/schism10/feiye/STOFS3D-v5/Inputs/v14/Parallel/Outputs/CUDEM_merged_thalwegs_1e6_single_fix_simple_sms_cleaned_32cores/*corrected_thalweg*.map', merged_fname=f'/sciclone/schism10/feiye/STOFS3D-v5/Inputs/v14/Parallel/Outputs/CUDEM_merged_thalwegs_1e6_single_fix_simple_sms_cleaned_32cores/total_corrected_thalwegs.map')
 
-    extract_quad_polygons(input_fname='/sciclone/schism10/Hgrid_projects/STOFS3D-v7/v18.3-s1_v1/lbnd+coast+levee.map')
+    extract_quad_polygons(input_fname='/sciclone/schism10/feiye/STOFS3D-v7/Inputs/I18c/tvd_polygons.map')
     pass

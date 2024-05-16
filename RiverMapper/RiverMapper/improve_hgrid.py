@@ -656,37 +656,38 @@ def improve_hgrid(gd, prj='esri:102008', skewness_threshold=30, area_threshold=5
     pass
 
 if __name__ == "__main__":
-    gd = cread_schism_hgrid('/sciclone/schism10/feiye/STOFS3D-v7/Inputs/I16/hg.gr3')
-    gd.compute_bnd()
+    # this test can find any boundary issues
+    gd = cread_schism_hgrid('/sciclone/schism10/Hgrid_projects/RiverInMesh/03.gr3')
+    gd.compute_area()
+    gd.compute_bnd(method=1)
 
-    # Sample usage 
-    i_arg_parse = False
+    # Sample usage , the horizontal coordinate unit of hgrid must be in meters
+    i_arg_parse = False  # set this to true for command line interface
 
     if i_arg_parse:  # get arguments from command line
         grid_file, skewness_threshold, area_threshold = cmd_line_interface()
-        gd = schism_grid(grid_file)
+        gd_meter = schism_grid(grid_file)
     else:  # or set arguments manually
-        grid_dir = '/sciclone/schism10/Hgrid_projects/STOFS3D-v8/v20p2s2v2/'
-        grid_file = f'{grid_dir}/v20.2-s2_v2.gr3'
+        grid_dir = '/sciclone/schism10/Hgrid_projects/RiverInMesh/'
+        grid_file = f'{grid_dir}/03.gr3'
 
         skewness_threshold = 60
         area_threshold = 5
         gd = schism_grid(grid_file)
 
-        # reproject to lon/lat if necessary
         gd_ll = copy.deepcopy(gd)
-        gd_ll.proj(prj0='esri:102008', prj1='epsg:4326')
-        # reproject to meters if necessary
-        # gd.proj(prj0='epsg:4326', prj1='esri:102008')
+        # gd_ll.proj(prj0='esri:102008', prj1='epsg:4326')  # reproject to lon/lat if necessary
 
-        grid_quality = quality_check_hgrid(gd, outdir=grid_dir, area_threshold=area_threshold, skewness_threshold=skewness_threshold)
+        gd_meter = copy.deepcopy(gd)
+        gd_meter.proj(prj0='epsg:4326', prj1='esri:102008')  # reproject to meters if necessary
+
+        grid_quality = quality_check_hgrid(gd_meter, outdir=grid_dir, area_threshold=area_threshold, skewness_threshold=skewness_threshold)
         write_diagnostics(outdir=grid_dir, grid_quality=grid_quality, hgrid_ref=gd_ll)
-        pass
 
     # sanity check for illegal boundaries, in case of which this step will hang
-    gd.compute_bnd()
+    gd_meter.compute_bnd(method=1)
 
     # improve grid quality
-    improve_hgrid(gd, n_intersection_fix=0, area_threshold=area_threshold, skewness_threshold=skewness_threshold, nmax=4)
+    improve_hgrid(gd_meter, n_intersection_fix=0, area_threshold=area_threshold, skewness_threshold=skewness_threshold, nmax=4)
 
     pass
