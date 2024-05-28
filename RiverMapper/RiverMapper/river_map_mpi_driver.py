@@ -69,6 +69,7 @@ def merge_outputs(output_dir):
     total_centerlines = merge_maps(f'{output_dir}/*centerlines.map', merged_fname=f'{output_dir}/total_centerlines.map')
     merge_maps(f'{output_dir}/*bank_final*.map', merged_fname=f'{output_dir}/total_banks_final.map')
     merge_maps(f'{output_dir}/*bank_raw.map', merged_fname=f'{output_dir}/total_banks_raw.map')
+    merge_maps(f'{output_dir}/*final_thalweg.map', merged_fname=f'{output_dir}/total_final_thalweg.map')
 
     # # shapefiles
     river_outline_files = glob(f'{output_dir}/*_river_outline.shp')

@@ -345,7 +345,7 @@ def set_eta_thalweg(x, y, z, coastal_z=[0.0, 3.0], const_depth=1.0):
 
     # smooth bathymetry along thalweg because the elevation is smoother than bathymetry
     mean_dl = np.mean(get_dist_increment(np.c_[x, y]))
-    z_smooth = moving_average(z, n=int(max(100.0/(mean_dl+1e-6), 2)), self_weights=2)
+    z_smooth = moving_average(z, n=int(max(100.0/(mean_dl+1e-6), 10)), self_weights=0)  # at least 10 points average to make it smooth
 
     # coastal (deep): assume zero
     idx = z_smooth <= coastal_z[0]
@@ -499,10 +499,10 @@ def get_thalweg_neighbors(thalwegs, thalweg_endpoints):
 
     return thalweg_neighbors
 
-def default_width2narcs(width, min_arcs=3, opt='regular'):
+def default_width2narcs(width, min_arcs=ConfigRiverMap.DEFAULT_min_arcs, opt='regular'):
 
     if callable(opt):  # user-defined function
-        nrow = int(max(3, opt(width)))  # force at least 2 divisions (3 points) in the cross-section
+        nrow = int(max(min_arcs, opt(width)))  # force at least min_arcs-1 divisions (min_arcs arcs) in the cross-section
     elif opt == 'regular':
         if width < 30:
             nrow = min_arcs
@@ -1094,7 +1094,7 @@ def improve_thalwegs(S_list, dl, line, search_length, perp, mpi_print_prefix, el
     xt_left = line[:, 0] + search_length * np.cos(perp + np.pi)
     yt_left = line[:, 1] + search_length * np.sin(perp + np.pi)
 
-    __search_steps = int(np.max(search_length/dl))
+    __search_steps = int(np.max(search_length/dl)) * 2  # scaled by 2 to refine the search
     __search_steps = max(5, __search_steps)  # give it at least something to search for, i.e., the length of 5 grid points
 
     x_new = np.empty((len(x), 2), dtype=float); x_new.fill(np.nan)
@@ -1311,7 +1311,7 @@ def make_river_map(
                 dy = S_y[1] - S_y[0]
                 dl = (abs(dx) + abs(dy)) / 2
                 search_length = river_threshold[-1] * 1.1
-                search_steps = int(river_threshold[-1] / dl)
+                search_steps = int(river_threshold[-1] / dl) * 2  # scaled by 2 to refine the search
 
                 # gdf = gpd.GeoDataFrame(df, geometry=[Point(xy) for xy in np.c_[S.lon[:2], S.lat[:2]]])
                 # gdf.crs = "EPSG:4326"
@@ -1479,7 +1479,7 @@ def make_river_map(
                 raise ValueError(f"{mpi_print_prefix} error: some elevs not found on thalweg {i+1} ...")
 
             if elev_scale < 0:  # invert z for barrier island
-                thalweg_eta = 0.0 * elevs
+                thalweg_eta = 0.0 * elevs  # use 0 as an approximation of the water level
             else:  # normal case
                 thalweg_eta = set_eta_thalweg(thalweg[:, 0], thalweg[:, 1], elevs)
 
@@ -1613,12 +1613,17 @@ def make_river_map(
                     else: # inner arcs, k == 0 or k == len(x_river_arcs)-1 are empty
                         inner_arcs[i, k] = SMS_ARC(points=np.c_[line[:, 0], line[:, 1], cross_channel_reso[:]], src_prj='cpp') 
 
-                    # save river arcs, these are not subject to cleaning, thus keeping the original pairing
+                    # save river arcs, these are not subject to cleaning,
+                    # thus keeping the original pairing
                     river_arcs[i, k] = SMS_ARC(points=np.c_[line[:, 0], line[:, 1], cross_channel_reso[:]], src_prj='cpp')
                     # save elevation in the z field
-                    elevs = get_elev_from_tiles(line[:, 0],line[:, 1], S_list, scale=elev_scale)
+                    if require_dem:
+                        elevs = get_elev_from_tiles(line[:, 0],line[:, 1], S_list, scale=elev_scale)
+                    else:
+                        elevs = np.zeros(line.shape[0])
                     if elevs is None:
                         raise ValueError(f"{mpi_print_prefix} error: some elevs not found on river arc {i}, {k} ...")
+
                     river_arcs_z[i, k] = SMS_ARC(points=np.c_[line[:, 0], line[:, 1], elevs], src_prj='cpp', proj_z=False)
                     # save extra information in the z field
                     z_info = np.c_[  # at most 6 pieces of info are allowed to be saved

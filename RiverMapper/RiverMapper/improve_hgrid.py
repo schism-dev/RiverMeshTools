@@ -510,7 +510,6 @@ def quality_check_hgrid(gd, outdir='./', area_threshold=None, skewness_threshold
         invalid_neighbors = None
         i_invalid_nodes = None
 
-
     return {
         'hgrid': gd, 'invalid_nodes': invalid_elnode, 'invalid_elements': invalid_neighbors, 'i_invalid_nodes': i_invalid_nodes,
         'small_ele': small_ele, 'skew_ele': skew_ele
@@ -655,34 +654,35 @@ def improve_hgrid(gd, prj='esri:102008', skewness_threshold=30, area_threshold=5
 
     pass
 
-if __name__ == "__main__":
-    # this test can find any boundary issues
-    gd = cread_schism_hgrid('/sciclone/schism10/Hgrid_projects/RiverInMesh/03.gr3')
+def test():
+    grid_dir = '/sciclone/schism10/Hgrid_projects/STOFS3D-v8/v20p2s2v7/'
+    grid_file = f'{grid_dir}/v20.2-s2_v7.gr3'
+
+    # this test may find any potential boundary issues
+    gd = cread_schism_hgrid(grid_file)
     gd.compute_area()
     gd.compute_bnd(method=1)
 
+    # manually set parameters
+    skewness_threshold = 60
+    area_threshold = 5
+    gd = schism_grid(grid_file)
+
+    gd_ll = copy.deepcopy(gd)
+    gd_ll.proj(prj0='esri:102008', prj1='epsg:4326')  # reproject to lon/lat if necessary
+    gd_meter = copy.deepcopy(gd)
+    # gd_meter.proj(prj0='epsg:4326', prj1='esri:102008')  # reproject to meters if necessary
+
+    grid_quality = quality_check_hgrid(gd_meter, outdir=grid_dir, area_threshold=area_threshold, skewness_threshold=skewness_threshold)
+    write_diagnostics(outdir=grid_dir, grid_quality=grid_quality, hgrid_ref=gd_ll)
+    
+    # improve grid quality
+    improve_hgrid(gd_meter, n_intersection_fix=0, area_threshold=area_threshold, skewness_threshold=skewness_threshold, nmax=4)
+
+def main():
     # Sample usage , the horizontal coordinate unit of hgrid must be in meters
-    i_arg_parse = False  # set this to true for command line interface
-
-    if i_arg_parse:  # get arguments from command line
-        grid_file, skewness_threshold, area_threshold = cmd_line_interface()
-        gd_meter = schism_grid(grid_file)
-    else:  # or set arguments manually
-        grid_dir = '/sciclone/schism10/Hgrid_projects/RiverInMesh/'
-        grid_file = f'{grid_dir}/03.gr3'
-
-        skewness_threshold = 60
-        area_threshold = 5
-        gd = schism_grid(grid_file)
-
-        gd_ll = copy.deepcopy(gd)
-        # gd_ll.proj(prj0='esri:102008', prj1='epsg:4326')  # reproject to lon/lat if necessary
-
-        gd_meter = copy.deepcopy(gd)
-        gd_meter.proj(prj0='epsg:4326', prj1='esri:102008')  # reproject to meters if necessary
-
-        grid_quality = quality_check_hgrid(gd_meter, outdir=grid_dir, area_threshold=area_threshold, skewness_threshold=skewness_threshold)
-        write_diagnostics(outdir=grid_dir, grid_quality=grid_quality, hgrid_ref=gd_ll)
+    grid_file, skewness_threshold, area_threshold = cmd_line_interface()
+    gd_meter = schism_grid(grid_file)
 
     # sanity check for illegal boundaries, in case of which this step will hang
     gd_meter.compute_bnd(method=1)
@@ -690,4 +690,8 @@ if __name__ == "__main__":
     # improve grid quality
     improve_hgrid(gd_meter, n_intersection_fix=0, area_threshold=area_threshold, skewness_threshold=skewness_threshold, nmax=4)
 
+
+if __name__ == "__main__":
+    # test()
+    main()
     pass

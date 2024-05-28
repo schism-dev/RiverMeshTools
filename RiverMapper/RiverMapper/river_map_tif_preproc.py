@@ -142,11 +142,13 @@ def Sidx(S, lon, lat):
     valid = (i < S.lon.shape) * (j < S.lat.shape) * (i >= 0) * (j >= 0)
     return [i, j], valid
 
-def get_elev_from_tiles(x_cpp, y_cpp, tile_list, scale=1.0):
+def get_elev_from_tiles(x_cpp, y_cpp, tile_list, scale=1.0, valid_range=[-1e3, 1e3]):
     '''
     x: vector of x coordinates, assuming cpp;
     y: vector of x coordinates, assuming cpp;
     tile_list: list of DEM tiles (in dem_data type, defined in river_map_tif_preproc)
+    scale: scale factor for elevation; use -1 to invert the elevation, e.g., for barrier islands
+    valid_range: values outside valid elevation range will be set to nan
     '''
 
     lon, lat = cpp2lonlat(x_cpp, y_cpp)
@@ -156,6 +158,7 @@ def get_elev_from_tiles(x_cpp, y_cpp, tile_list, scale=1.0):
         [j, i], in_box = Sidx(S, lon, lat)
         idx = (np.isnan(elevs) * in_box).astype(bool)  # only update valid entries that are not already set (i.e. nan at this step) and in DEM box
         elevs[idx] = S.elev[i[idx], j[idx]]
+        elevs[(elevs < valid_range[0]) | (elevs > valid_range[1])] = np.nan  # set invalid values to nan
 
     if np.isnan(elevs).any():
         # raise ValueError('failed to find elevation')
