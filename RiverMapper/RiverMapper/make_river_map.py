@@ -1627,9 +1627,10 @@ def make_river_map(
                     river_arcs_z[i, k] = SMS_ARC(points=np.c_[line[:, 0], line[:, 1], elevs], src_prj='cpp', proj_z=False)
                     # save extra information in the z field
                     z_info = np.c_[  # at most 6 pieces of info are allowed to be saved
-                        np.ones(x_river_arc.shape, dtype=int) * this_nrow_arcs,  # number of along-channel arcs
+                        np.ones(x_river_arc.shape, dtype=int) * len(x_river_arcs),  # number of along-channel arcs, including outer arcs
                         (np.zeros(x_river_arc.shape) + (k==0)+(k==len(x_river_arcs)-1)).astype(bool).astype(int) # if this is an outer-most arc
                     ]
+                    # Note: this_nrow_arcs is the number of inner arcs, not including outer arcs
                     z_encoded = z_encoder(z_info)
                     river_arcs_extra[i, k] = SMS_ARC(points=np.c_[line[:, 0], line[:, 1], z_encoded], src_prj='cpp', proj_z=False)
 

@@ -13,7 +13,7 @@ from pylib import schism_grid
 from pylib import proj_pts, read_schism_bpfile, schism_bpfile
 
 from pylib_experimental.schism_file import cread_schism_hgrid
-    
+
 # pylib is a python library that handles many schism-related file manipulations by Dr. Zhengui Wang
 # , which can be installed by "pip install git+https://github.com/wzhengui/pylibs.git"
 import shutil
@@ -518,7 +518,7 @@ def quality_check_hgrid(gd, outdir='./', area_threshold=None, skewness_threshold
 def write_diagnostics(outdir=None, grid_quality=None, hgrid_ref=None):
     '''hgrid_ref: reference hgrid, used to write diagnostic outputs,
     , which can be in a different projection than the hgrid associated with grid_quality'''
-    
+
     if not hasattr(hgrid_ref, 'xctr'):
         hgrid_ref.compute_ctr()
 
@@ -655,8 +655,8 @@ def improve_hgrid(gd, prj='esri:102008', skewness_threshold=30, area_threshold=5
     pass
 
 def test():
-    grid_dir = '/sciclone/schism10/Hgrid_projects/STOFS3D-v8/v20p2s2v7/'
-    grid_file = f'{grid_dir}/v20.2-s2_v7.gr3'
+    grid_dir = '/sciclone/schism10/Hgrid_projects/RiverInMesh/v2'
+    grid_file = f'{grid_dir}/v2.gr3'
 
     # this test may find any potential boundary issues
     gd = cread_schism_hgrid(grid_file)
@@ -669,13 +669,13 @@ def test():
     gd = schism_grid(grid_file)
 
     gd_ll = copy.deepcopy(gd)
-    gd_ll.proj(prj0='esri:102008', prj1='epsg:4326')  # reproject to lon/lat if necessary
+    # gd_ll.proj(prj0='esri:102008', prj1='epsg:4326')  # reproject to lon/lat if necessary
     gd_meter = copy.deepcopy(gd)
-    # gd_meter.proj(prj0='epsg:4326', prj1='esri:102008')  # reproject to meters if necessary
+    gd_meter.proj(prj0='epsg:4326', prj1='esri:102008')  # reproject to meters if necessary
 
     grid_quality = quality_check_hgrid(gd_meter, outdir=grid_dir, area_threshold=area_threshold, skewness_threshold=skewness_threshold)
     write_diagnostics(outdir=grid_dir, grid_quality=grid_quality, hgrid_ref=gd_ll)
-    
+
     # improve grid quality
     improve_hgrid(gd_meter, n_intersection_fix=0, area_threshold=area_threshold, skewness_threshold=skewness_threshold, nmax=4)
 
@@ -692,6 +692,6 @@ def main():
 
 
 if __name__ == "__main__":
-    # test()
-    main()
+    test()
+    # main()
     pass
