@@ -35,23 +35,25 @@ from sklearn.neighbors import NearestNeighbors
 
 # Local application/library specific imports
 from RiverMapper.SMS import (
-    SMS_ARC, SMS_MAP, cpp2lonlat, curvature, dl_cpp2lonlat,
+    SMS_ARC, SMS_MAP, curvature,
     dl_lonlat2cpp, get_all_points_from_shp, get_perpendicular_angle,
     lonlat2cpp
 )
 from RiverMapper.river_map_tif_preproc import Tif2XYZ, get_elev_from_tiles
 from RiverMapper.config_river_map import ConfigRiverMap
-from RiverMapper.util import cpp_crs, z_encoder
+from RiverMapper.util import CPP_CRS, z_encoder
 
 # np.seterr(all='raise')  # Needs more attention, see Issue #1
 
+
 class Geoms_XY():
+    '''Class to handle the geometric processing of a list of LineString objects'''
+
     def __init__(self, geom_list, crs='epsg:4326', add_z=False):
-        try:
-            if not isinstance(geom_list[-1], LineString):
-                raise TypeError()
-        except:
-            raise ValueError('Input must be an iterable of geometries')
+        if not isinstance(geom_list, list):
+            raise TypeError('Input must be a list of LineString objects')
+        if not all(isinstance(geom, LineString) for geom in geom_list):
+            raise TypeError('None LineString object found in the list')
 
         self.geom_list = [geom for geom in geom_list]
         self.add_z = add_z
@@ -59,27 +61,39 @@ class Geoms_XY():
         self.crs = crs
 
     def geomlist2xy(self):
+        '''
+        Convert a list of LineString objects to a 2D numpy array of coordinates
+        return:
+            geoms_xy: 2D numpy array of coordinates
+            geoms_xy_idx: 2D numpy array of indices for each LineString object
+        '''
+
         ncol = 3 if self.add_z else 2
 
         geoms_xy_idx = np.ones((len(self.geom_list), ncol), dtype=int) * -9999
 
+        # record the start and end indices of each LineString's vertices
         idx = 0
         for i, geom in enumerate(self.geom_list):
             geoms_xy_idx[i, 0] = idx
             geoms_xy_idx[i, 1] = idx + len(geom.xy[0])
             idx += len(geom.xy[0])
 
+        # concatenate the coordinates of all vertices of LineString objects
         geoms_xy = np.empty((geoms_xy_idx[-1, 1], ncol), dtype=float)
         for i, geom in enumerate(self.geom_list):
-            geoms_xy[geoms_xy_idx[i, 0]:geoms_xy_idx[i, 1], :] = geom.coords._coords[:, :ncol]
+            geoms_xy[geoms_xy_idx[i, 0]:geoms_xy_idx[i, 1], :] = np.array(geom.coords)[:, :ncol]
 
         return geoms_xy, geoms_xy_idx
 
     def xy2geomlist(self):
+        '''re-construct LineString objects from the 2D numpy array of coordinates'''
         for i, _ in enumerate(self.geom_list):
             self.geom_list[i] = LineString(self.xy[self.xy_idx[i, 0]:self.xy_idx[i, 1], :])
 
-    def update_coords(self, new_coords:np.ndarray):
+    def update_coords(self, new_coords: np.ndarray):
+        """update the coordinates of the LineString objects by
+        replacing the original coordinates with new ones in a 2D numpy array"""
         iupdate = False
         if not np.array_equal(self.xy, new_coords):
             self.xy[:, :] = new_coords[:, :]
@@ -88,14 +102,16 @@ class Geoms_XY():
         return iupdate
 
     def snap_to_points(self, snap_points, target_poly_gdf=None):
+        """Snap targeted points to the specified locations (i.e., snap_points)
+        , optionally target polygons are provided to limit the snapping to within the polygons"""
         geoms_xy_gdf = points2GeoDataFrame(self.xy, crs=self.crs)
 
         if target_poly_gdf is None:
             i_target_points = np.ones((self.xy.shape[0], ), dtype=bool)
         else:
-            pointInPolys = gpd.tools.sjoin(geoms_xy_gdf, target_poly_gdf, predicate="within", how='left')
-            _, idx = np.unique(pointInPolys.index, return_index=True)  # some points belong to multiple polygons
-            i_target_points = np.array(~np.isnan(pointInPolys.index_right))[idx]
+            points_in_polys = gpd.tools.sjoin(geoms_xy_gdf, target_poly_gdf, predicate="within", how='left')
+            _, idx = np.unique(points_in_polys.index, return_index=True)  # some points belong to multiple polygons
+            i_target_points = np.array(~np.isnan(points_in_polys.index_right))[idx]
 
         _, idx = nearest_neighbour(self.xy[i_target_points, :2], np.c_[snap_points[:, 0], snap_points[:, 1]])
         self.xy[i_target_points, :] = snap_points[idx, :]
@@ -103,6 +119,8 @@ class Geoms_XY():
         self.xy2geomlist()
 
     def snap_to_self(self, tolerance):
+        """Snap points of self within the specified tolerance,
+        Not used in the current version"""
         # Check for approximate equality within tolerance
         unique_rows = np.unique(np.round(self.xy, decimals=int(-np.log10(tolerance))),
                                 axis=0, return_index=True)[1]
@@ -339,13 +357,53 @@ def set_eta(x, y):
     # eta = np.interp(y, y0, eta0)
     return eta
 
+def fill_missing_values(arr, idx):
+    """Replace outliers in arr with linearly interpolated values,
+    for points outside the range of the linear interpolation,
+    the values are replaced with the nearest non-outlier values."""
+
+    if len(idx) == 0:
+        return arr
+
+    data = arr.copy()
+
+    # If all indices are outliers, return the original data
+    if len(idx) == len(data):
+        return data
+
+    # Indices of the non-outliers
+    non_outlier_indices = np.setdiff1d(np.arange(data.size), idx)
+
+    # Linear interpolation for in-range points
+    interpolated_values = np.interp(idx, non_outlier_indices, data[non_outlier_indices])
+
+    # Replace outliers with interpolated values
+    data[idx] = interpolated_values
+
+    # Handling outliers at the beginning
+    if idx[0] == 0:
+        first_non_outlier = non_outlier_indices[0]
+        data[0:first_non_outlier] = data[first_non_outlier]
+
+    # Handling outliers at the end
+    if idx[-1] == len(data) - 1:
+        last_non_outlier = non_outlier_indices[-1]
+        data[last_non_outlier + 1:] = data[last_non_outlier]
+
+    return data
+
 def set_eta_thalweg(x, y, z, coastal_z=[0.0, 3.0], const_depth=1.0):
+    """Estimate the water surface elevation along the thalweg based on the bathymetry"""
+
+    from scipy.stats import zscore
+
     # approximation based on bathymetry
     eta = np.zeros(x.shape, dtype=float)
 
     # smooth bathymetry along thalweg because the elevation is smoother than bathymetry
     mean_dl = np.mean(get_dist_increment(np.c_[x, y]))
-    z_smooth = moving_average(z, n=int(max(100.0/(mean_dl+1e-6), 10)), self_weights=0)  # at least 10 points average to make it smooth
+    z_fixed = fill_missing_values(z, np.argwhere(zscore(z) > 2)[:, 0])  # remove outliers, nEw
+    z_smooth = moving_average(z_fixed, n=int(max(100.0/(mean_dl+1e-6), 10)), self_weights=0)  # at least 10 points average to make it smooth
 
     # coastal (deep): assume zero
     idx = z_smooth <= coastal_z[0]
@@ -358,6 +416,11 @@ def set_eta_thalweg(x, y, z, coastal_z=[0.0, 3.0], const_depth=1.0):
     # transitional zone: assume linear transition
     idx = (z_smooth>coastal_z[0])*(z_smooth<coastal_z[1])
     eta[idx] = (z_smooth[idx]+const_depth) * (z_smooth[idx]-coastal_z[0])/(coastal_z[1]-coastal_z[0])
+
+    # coastal water depths are mostly larger than the constant depth
+    # force minimum depth to be the same as the constant depth,
+    # this is necessary to avoid negative depths in the transitional zone
+    eta = np.maximum(eta, z_smooth + const_depth)
 
     return eta
 
@@ -815,7 +878,7 @@ def CloseArcs(polylines: gpd.GeoDataFrame):
 
 def clean_intersections(
         arcs=None, target_polygons=None, snap_points: np.ndarray=None,
-        buffer_coef=0.3, idummy=False, i_OCSMesh=False, projected_crs=cpp_crs
+        buffer_coef=0.3, idummy=False, i_OCSMesh=False, projected_crs=CPP_CRS
     ):
     '''
     Deprecated!
@@ -1001,8 +1064,8 @@ def output_OCSMesh(output_dir, arc_shp_fname='total_arcs.shp', outline_shp_fname
         index=range(len(total_arcs_cleaned_polys)), crs='epsg:4326', geometry=total_arcs_cleaned_polys
     )
     # read the pre-generated river outline, which is used to filter out land areas
-    total_polys_cpp = total_polys.to_crs(cpp_crs)
-    total_river_outline_cpp = gpd.read_file(f'{output_dir}/{outline_shp_fname}').to_crs(cpp_crs)
+    total_polys_cpp = total_polys.to_crs(CPP_CRS)
+    total_river_outline_cpp = gpd.read_file(f'{output_dir}/{outline_shp_fname}').to_crs(CPP_CRS)
 
     # use buffers to roughly filter out land polygons that are largely outside the river outline
     total_river_outline_cpp_buffer = total_river_outline_cpp.copy()
@@ -1026,11 +1089,11 @@ def output_OCSMesh(output_dir, arc_shp_fname='total_arcs.shp', outline_shp_fname
     questionable_idx = (idx_river[0].astype(int) + idx_river[1].astype(int) == 1)  # the candidates that are not within the stricter buffer but within the looser buffer
     if sum(questionable_idx) > 0:  # at least one questionable candidate
         questionable_ids = np.argwhere(questionable_idx).ravel()
-        questionable_polys = gpd.GeoDataFrame(crs=cpp_crs, geometry=total_polys_cpp.loc[questionable_idx, 'geometry'])
+        questionable_polys = gpd.GeoDataFrame(crs=CPP_CRS, geometry=total_polys_cpp.loc[questionable_idx, 'geometry'])
         # find intersection area between each questionable polygon and all river outline polygons
         questionable_intersection = sjoin(questionable_polys, total_river_outline_cpp, how="inner", predicate="intersects")
         intersection_area = questionable_intersection.apply(
-            lambda row: row['geometry'].intersection(total_river_outline_cpp.to_crs(cpp_crs).loc[row['index_right'], 'geometry']).area, axis=1)
+            lambda row: row['geometry'].intersection(total_river_outline_cpp.to_crs(CPP_CRS).loc[row['index_right'], 'geometry']).area, axis=1)
 
         # combine same index rows, which result from overlaps between a same polygon and multiple river outline polygons
         intersection_area = intersection_area.groupby(intersection_area.index).sum().sort_index()
@@ -1052,7 +1115,7 @@ def output_OCSMesh(output_dir, arc_shp_fname='total_arcs.shp', outline_shp_fname
     print(f'Identify river polygons for OCSMesh : secondary screening took {time.time()-time_pre} seconds.')
 
     # assemble the final river polygons
-    river_polys = gpd.GeoDataFrame(crs=cpp_crs, geometry=total_polys_cpp.loc[idx_river[0], 'geometry'])
+    river_polys = gpd.GeoDataFrame(crs=CPP_CRS, geometry=total_polys_cpp.loc[idx_river[0], 'geometry'])
 
     # write the actual river polygons to file
     drop_columns=[col for col in river_polys.columns if col not in ['geometry', 'FID']]
@@ -1123,7 +1186,7 @@ def improve_thalwegs(S_list, dl, line, search_length, perp, mpi_print_prefix, el
         low = np.argpartition(elevs, n_low, axis=1)
         thalweg_idx = np.median(low[:, :n_low], axis=1).astype(int)
 
-        if any(thalweg_idx<0) or any(thalweg_idx>=xts.shape[1]):
+        if any(thalweg_idx < 0) or any(thalweg_idx >= xts.shape[1]):
             print(f'{mpi_print_prefix} Warning: invalid thalweg index after improvement: {np.c_[x, y]}')
             continue  # aborting thalweg improvement
 
@@ -1139,6 +1202,7 @@ def improve_thalwegs(S_list, dl, line, search_length, perp, mpi_print_prefix, el
 
     return np.c_[x_real, y_real], i_corrected
 
+
 def get_bank(S_list, x, y, thalweg_eta, xt, yt, search_steps=100, search_tolerance=5, elev_scale=1.0):
     '''
     Get a bank on one side of the thalweg (x, y)
@@ -1147,35 +1211,33 @@ def get_bank(S_list, x, y, thalweg_eta, xt, yt, search_steps=100, search_toleran
         parameter deciding the search area: search_stps
     '''
 
-    # search_steps_tile = np.repeat(np.arange(search_steps).reshape(1, -1), len(x), axis=0)  # expanded to the search area
-
-    # form a search area between thalweg and search limit
+    # form a search area between the thalweg and the search limit
     xts = np.linspace(x, xt, search_steps, axis=1)
     yts = np.linspace(y, yt, search_steps, axis=1)
 
-    eta_stream = np.tile(thalweg_eta.reshape(-1, 1), (1, search_steps))  # expanded to the search area
+    # esitmated eta along the thalweg, expanded laterally to cover the search area
+    eta_stream = np.tile(thalweg_eta.reshape(-1, 1), (1, search_steps))
 
+    # ground elevations of the search area
     elevs = get_elev_from_tiles(xts, yts, S_list, scale=elev_scale)
     if elevs is None:
-        return None, None  # return None for both banks
+        return None, None  # return None for the bank
 
-    # elevs is well defined if we reach here
-
-    R = (elevs - eta_stream)  # closeness to target depth
-    bank_idx = np.argmax(R>0, axis=1)
+    # elevs is well defined if this step is reached
+    d_eta = elevs - eta_stream  # closeness to target depth
+    bank_idx = np.argmax(d_eta > 0, axis=1)
 
     invalid = bank_idx == 0
-    bank_idx[invalid] = np.argmin(abs(R[invalid, :]), axis=1)
+    bank_idx[invalid] = np.argmin(abs(d_eta[invalid, :]), axis=1)
 
-    # R_sort_idx = np.argsort(R)
+    # R_sort_idx = np.argsort(d_eta)
     # bank_idx = np.min(R_sort_idx[:, :min(search_steps, search_tolerance)], axis=1)
 
-    # x_banks = S.lon[jj[range(0, len(x)), bank_idx]]
-    # y_banks = S.lat[ii[range(0, len(x)), bank_idx]]
     x_banks = xts[range(len(x)), bank_idx]
     y_banks = yts[range(len(x)), bank_idx]
 
     return x_banks, y_banks
+
 
 def make_river_map(
         tif_fnames, thalweg_shp_fname, output_dir,
@@ -1202,7 +1264,7 @@ def make_river_map(
         i_pseudo_channel=ConfigRiverMap.DEFAULT_i_pseudo_channel,
         pseudo_channel_width=ConfigRiverMap.DEFAULT_pseudo_channel_width,
         nrow_pseudo_channel=ConfigRiverMap.DEFAULT_nrow_pseudo_channel,
-    ):
+):
     '''
     [Core routine for making river maps]
     <Mandatory Inputs>:
@@ -1212,7 +1274,7 @@ def make_river_map(
 
     <Optional Inputs>:
     These inputs can also be handled by the ConfigRiverMap class (recommended; see details in the online manual).
-    | selected_thalweg | integer numpy array | Indices of a subset of thalwegs for which the river arcs will be sought; mainly used by the parallel driver |
+    | selected_thalweg | integer numpy array | Indices of thalwegs to be processed; mainly used by the parallel driver |
     | output_prefix | string | a prefix of the output files, mainly used by the caller of this script; can be empty |
     | mpi_print_prefix | string | a prefix string to identify the calling mpi processe in the output messages; can be empty |
     | river_threshold | float | minimum and maximum river widths (in meters) to be resolved |
@@ -1243,7 +1305,7 @@ def make_river_map(
     - other diagnostic outputs (if i_DiagnosticsOutput is True)
     '''
 
-    # ------------------------- other input parameters not exposed to user ---------------------------
+    # ------------------------- other input parameters not exposed to users ---------------------------
     nudge_ratio = np.array((0.3, 2.0))  # ratio between nudging distance to mean half-channel-width
     MapUnit2METER = 1.0  # ratio between actual map unit and meter; deprecated, just use lon/lat for any inputs
     # ------------------------- end other inputs ---------------------------
@@ -1446,6 +1508,15 @@ def make_river_map(
             print(f"{mpi_print_prefix} Thalweg {i} marked as invalid in dry run, skipping ...")
             continue
 
+        # touch up on the estimated width to remove potential noises, nEw
+        width = np.round(width, 3)  # cut off at mm to facilitate comparison
+        sorted_widths = sorted(np.unique(width))  # find the two smallest widths
+        if len(sorted_widths) > 2:
+            if sorted_widths[1] / sorted_widths[0] > 10:
+                # if the ratio between the smallest and the second smallest is too large,
+                # the smallest width is likely to be a noise
+                width[width == sorted_widths[0]] = np.mean(width[width > sorted_widths[0]])
+
         # set number of cross-channel elements
         if i_pseudo_channel == 1:
             this_nrow_arcs = nrow_pseudo_channel
@@ -1494,7 +1565,7 @@ def make_river_map(
             else:  # assuming the original average width is correct, which is not always true;
                    # however, a larger search length can lead to over-correcting the thalwegs to adjacent channels
                 search_length_for_correction = moving_average(width, n=10) * 0.5
-            thalweg, is_corrected= improve_thalwegs(S_list, dl, thalweg, search_length_for_correction, perp, mpi_print_prefix, elev_scale=elev_scale)
+            thalweg, is_corrected = improve_thalwegs(S_list, dl, thalweg, search_length_for_correction, perp, mpi_print_prefix, elev_scale=elev_scale)
             if not is_corrected:
                 print(f"{mpi_print_prefix} warning: thalweg {i+1} (head: {thalweg[0]}; tail: {thalweg[-1]}) failed to correct, using original thalweg ...")
             corrected_thalwegs[i] = SMS_ARC(points=np.c_[thalweg[:, 0], thalweg[:, 1]], src_prj='cpp')
@@ -1512,7 +1583,7 @@ def make_river_map(
             thalweg, perp = smooth_thalweg(thalweg, ang_diff_shres=np.pi/2.4)
             final_thalwegs[i] = SMS_ARC(points=np.c_[thalweg[:, 0], thalweg[:, 1]], src_prj='cpp')
 
-            # update thalweg info
+            # update thalweg z
             elevs = get_elev_from_tiles(thalweg[:, 0],thalweg[:, 1], S_list, scale=elev_scale)
             if elevs is None:
                 raise ValueError(f"{mpi_print_prefix} error: some elevs not found on thalweg {i+1} ...")

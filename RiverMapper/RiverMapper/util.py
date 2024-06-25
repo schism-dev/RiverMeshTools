@@ -8,10 +8,12 @@ from pathlib import Path
 import numpy as np
 
 
-cpp_crs = "+proj=eqc +lat_ts=0 +lat_0=0 +lon_0=0 +x_0=0 +y_0=0 +ellps=WGS84 +datum=WGS84 +units=m +no_defs"
+# The equirectangular projection, a simple map projection that maps (lat, lon) to (x, y) coordinates.
+CPP_CRS = "+proj=eqc +lat_ts=0 +lat_0=0 +lon_0=0 +x_0=0 +y_0=0 +ellps=WGS84 +datum=WGS84 +units=m +no_defs"
 
 
 def silentremove(filenames):
+    '''Remove files or directories without raising exceptions if they do not exist.'''
     if isinstance(filenames, str):
         filenames = [filenames]
     elif isinstance(filenames, Path):
@@ -25,7 +27,8 @@ def silentremove(filenames):
         except FileNotFoundError:
             pass  # missing_ok
 
-def z_encoder(int_info:np.ndarray):
+
+def z_encoder(int_info: np.ndarray):
     '''
     Encode information as 2-digit integers in z's decimal part,
 
@@ -46,7 +49,7 @@ def z_encoder(int_info:np.ndarray):
 
     # the integer part is the number of integers in the list
     n_info = int_info.shape[1]
-    if n_info> 6:
+    if n_info > 6:
         raise ValueError('int_info must not be more than 6 columns')
 
     # convert int_info to string
@@ -66,7 +69,8 @@ def z_decoder(z):
     Returns a list of 2D integer arrays, each containing the decoded information for corresponding z.
 
     Parameters:
-    z (float or np.ndarray): A single float or an n x 1 array of floats, each with its integer part between 1 and 6, inclusive.
+    z (float or np.ndarray): A single float or an n x 1 array of floats,
+    each with its integer part between 1 and 6, inclusive.
 
     Returns:
     list of np.ndarray: A list of 2D integer arrays, each containing the decoded information.
@@ -84,7 +88,6 @@ def z_decoder(z):
     else:
         raise TypeError('z_input must be a float or an n x 1 NumPy array of floats')
 
-
     num_digits = z_array.astype(int)
     if np.any((num_digits > 6) | (num_digits <= 0)):
         raise ValueError('The integer part of each z in z_array must be between 1 and 6')
@@ -93,10 +96,17 @@ def z_decoder(z):
     z_scaled = np.round(z_array * 100**num_digits).astype(int)
     z_scaled_str = np.char.mod('%d', z_scaled)
 
-    # Extract the decimal parts from the scaled strings
+    # Extract the decimal parts of z_input from z_scaled_str
     decimal_parts_str = np.array([z_scaled_str[i][1:] for i in range(len(z_scaled_str))])
 
     # Convert each 2-digit group into an integer
-    decoded_arrays = [np.array([int(decimal_parts_str[i][j:j+2]) for j in range(0, len(decimal_parts_str[i]), 2)]) for i in range(len(decimal_parts_str))]
+    decoded_arrays = []
+    # loop through each row, i.e., each number
+    for i, decimal_part_str in enumerate(decimal_parts_str):
+        # loop through each 2-digit group in the decimal part
+        decoded_arrays.append(np.array([int(decimal_part_str[j:j+2]) for j in range(0, len(decimal_part_str), 2)]))
+
+    decoded_arrays0 = [np.array([int(decimal_parts_str[i][j:j+2]) for j in range(0, len(decimal_parts_str[i]), 2)]) for i in range(len(decimal_parts_str))]
+    assert np.all([np.all(decoded_arrays[i] == decoded_arrays0[i]) for i in range(len(decoded_arrays))])
 
     return decoded_arrays
