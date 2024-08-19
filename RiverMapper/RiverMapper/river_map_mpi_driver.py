@@ -43,6 +43,21 @@ def my_mpi_idx(N, size, rank):
     i_my_groups[my_group_ids] = True
     return my_group_ids, i_my_groups
 
+
+def rename_single_core_outputs(output_dir):
+    '''
+    Rename the output files from a single-core run
+    '''
+    print('\n------------------ renaming single-core outputs --------------\n')
+    # rename the output files
+    for file in glob(f'{output_dir}/Group_0_0_0_*'):
+        if 'total' in file:
+            new_name = file.replace('Group_0_0_0_', '')
+        else:
+            new_name = file.replace('Group_0_0_0_', 'total_')
+        Path(file).rename(new_name)
+
+
 def merge_outputs(output_dir):
     print(f'\n------------------ merging outputs from all cores --------------\n')
     time_merge_start = time.time()
@@ -260,30 +275,35 @@ def river_map_mpi_driver(
     # finalize
     if rank == 0:
         # merge outputs from all ranks
-        total_arcs_map, _, _, _, _ = merge_outputs(output_dir)
+        if size > 1:
+            total_arcs_map, _, _, _, _ = merge_outputs(output_dir)
 
-        print(f'\n--------------- final clean-ups --------------------------------------------------------\n')
-        time_final_cleanup_start = time.time()
+            print(f'\n--------------- final clean-ups --------------------------------------------------------\n')
+            time_final_cleanup_start = time.time()
 
-        total_arcs_cleaned = clean_arcs(
-            [arc for arc in total_arcs_map.to_GeoDataFrame().geometry.unary_union.geoms],
-            n_clean_iter=river_map_config.optional['n_clean_iter'],
-            snap_point_reso_ratio=river_map_config.optional['snap_point_reso_ratio'],
-            snap_arc_reso_ratio=river_map_config.optional['snap_arc_reso_ratio'],
-        )
+            total_arcs_cleaned = clean_arcs(
+                [arc for arc in total_arcs_map.to_GeoDataFrame().geometry.unary_union.geoms],
+                n_clean_iter=river_map_config.optional['n_clean_iter'],
+                snap_point_reso_ratio=river_map_config.optional['snap_point_reso_ratio'],
+                snap_arc_reso_ratio=river_map_config.optional['snap_arc_reso_ratio'],
+            )
 
-        SMS_MAP(arcs=geos2SmsArcList(total_arcs_cleaned)).writer(filename=f'{output_dir}/total_arcs.map')
+            SMS_MAP(arcs=geos2SmsArcList(total_arcs_cleaned)).writer(filename=f'{output_dir}/total_arcs.map')
 
-        gpd.GeoDataFrame(
-            index=range(len(total_arcs_cleaned)), crs='epsg:4326', geometry=total_arcs_cleaned
-        ).to_file(filename=f'{output_dir}/total_arcs.shp', driver="ESRI Shapefile")
+            gpd.GeoDataFrame(
+                index=range(len(total_arcs_cleaned)), crs='epsg:4326', geometry=total_arcs_cleaned
+            ).to_file(filename=f'{output_dir}/total_arcs.shp', driver="ESRI Shapefile")
 
-        print(f'Final clean-ups took: {time.time()-time_final_cleanup_start} seconds.')
+            print(f'Final clean-ups took: {time.time()-time_final_cleanup_start} seconds.')
+
+            # delete per-core outputs
+            silentremove(glob(f'{output_dir}/Group*'))
+            print(f'>>>>>>>> Total run time: {time.time()-time_start} seconds >>>>>>>>')
+        else:
+            # rename the output files
+            rename_single_core_outputs(output_dir)
 
         # outputs for OCSMesh
         if river_map_config.optional['i_OCSMesh']:
             output_OCSMesh(output_dir)
 
-        # delete per-core outputs
-        silentremove(glob(f'{output_dir}/Group*'))
-        print(f'>>>>>>>> Total run time: {time.time()-time_start} seconds >>>>>>>>')

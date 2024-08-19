@@ -4,22 +4,26 @@ This script provides classes and methods for processing tif files.
 
 
 import os
+from glob import glob
 import errno
 import copy
-import numpy as np
 import pickle
 import json
-import time
 import math
 from dataclasses import dataclass
+
+import numpy as np
 from osgeo import gdal
-from glob import glob
+
 from RiverMapper.SMS import lonlat2cpp, cpp2lonlat, get_all_points_from_shp
 from RiverMapper.util import silentremove
 
 
 @dataclass
 class dem_data():
+    '''
+    Simple class to store DEM data
+    '''
     x: np.ndarray
     y: np.ndarray
     lon: np.ndarray
@@ -34,7 +38,7 @@ def parse_dem_tiles(dem_code, dem_tile_digits):
     Parse a dem_code into the original DEM id.
     A unique code is assigned to all parent tiles (from the same DEM source) of a thalweg, e.g.:
     327328329 is actually Tile No. 327, 328, 329
-    Almost all thalwegs only have <=4 parent tiles (when it is near the intersection point);
+    Normally, a thalweg has <= 4 parent tiles (1 mostly; > 2 at the boundary of DEM tiles);
     n_tiles > 4 will generate an exception.
     '''
     if dem_code == 0:
@@ -43,20 +47,31 @@ def parse_dem_tiles(dem_code, dem_tile_digits):
     dem_tile_ids = []
     n_tiles = int(math.log10(dem_code)/dem_tile_digits) + 1
     if n_tiles > 4:
-        raise ValueError("Some thalweg points belong to more than 4 tiles from one DEM source, you may need to clean up the DEM tiles first.")
+        raise ValueError(
+            "Some thalweg points belong to more than 4 tiles from one DEM source, "
+            "you may need to clean up the DEM tiles first.")
     for digit in reversed(range(n_tiles)):
         x, dem_code = divmod(dem_code, 10**(digit*dem_tile_digits))
         dem_tile_ids.append(int(x-1))
     return dem_tile_ids
 
+
 def get_tif_box(tif_fname=None):
+    '''
+    Get the bounding box of a tif file
+    '''
     src = gdal.Open(tif_fname)
-    ulx, xres, xskew, uly, yskew, yres  = src.GetGeoTransform()
+    ulx, xres, _, uly, _, yres = src.GetGeoTransform()
     lrx = ulx + (src.RasterXSize * xres)
     lry = uly + (src.RasterYSize * yres)
     return [ulx, lry, lrx, uly]
 
+
 def Tif2XYZ(tif_fname=None, cache=True):
+    '''
+    Read a tif file and return a dem_data object,
+    which includes x, y, lon, lat, z, dx, dy
+    '''
     is_new_cache = False
 
     cache_name = tif_fname + '.pkl'
@@ -67,10 +82,11 @@ def Tif2XYZ(tif_fname=None, cache=True):
                 S = pickle.load(f)
                 return [S, is_new_cache]  # cache successfully read
         except (ModuleNotFoundError, AttributeError) as e:
-            # remove existing cache if failing to read from it
+            print(f'Warning: failed to read cache: {e}')
+            print('removing existing cache and regenerating it ...')
             silentremove(cache_name)
         except OSError as e:
-            if e.errno != errno.ENOENT: # errno.ENOENT = no such file or directory
+            if e.errno != errno.ENOENT:  # errno.ENOENT = no such file or directory
                 raise e
 
     # read from raw tif and generate cache
@@ -83,7 +99,7 @@ def Tif2XYZ(tif_fname=None, cache=True):
     gt = ds.GetGeoTransform()
     TL_x, TL_y = gt[0], gt[3]
 
-    #showing a 2D image of the topo
+    # showing a 2D image of the topo
     # plt.imshow(elevation, cmap='gist_earth',extent=[minX, maxX, minY, maxY])
     # plt.show()
 
@@ -110,39 +126,44 @@ def Tif2XYZ(tif_fname=None, cache=True):
 
     return [S, is_new_cache]  # already_cached = False
 
-def reproject_tifs(tif_files:list, srcSRS='EPSG:4326', dstSRS='EPSG:26917', outdir='./'):
+
+def reproject_tifs(tif_files: list, src_crs='EPSG:4326', dst_crs='EPSG:26917', outdir='./'):
     '''
     The function failed on CRM tiles, for which use the cmd line tool gdalwarp, e.g.:
     gdalwarp -s_srs EPSG:4326 -t_srs EPSG:26917 -of GTiff ../Lonlat/crm_vol5.tif crm_vol5.26917.tif
     '''
     for i, tif_file in enumerate(tif_files):
         print(f'reprojecting tifs: {i+1} of {len(tif_files)}, {tif_file}')
-        epsg = dstSRS.split(':')[1]
+        epsg = dst_crs.split(':')[1]
         tif_outfile = outdir + os.path.basename(tif_file).split('.')[0] + '.' + epsg + '.tif'
         if not os.path.exists(tif_outfile):
-            g = gdal.Warp(tif_outfile, tif_file, srcSRS=srcSRS, dstSRS=dstSRS)
-            g = None
+            gdal.Warp(tif_outfile, tif_file, srcSRS=src_crs, dstSRS=dst_crs)
 
 
 def pts_in_box(pts, box):
-    in_box = (pts[:, 0] >  box[0]) * (pts[:, 0] <= box[2]) * \
-             (pts[:, 1] >  box[1]) * (pts[:, 1] <= box[3])
+    '''
+    Simple function to check if a point is in a box
+    '''
+    in_box = (pts[:, 0] > box[0]) * (pts[:, 0] <= box[2]) * \
+             (pts[:, 1] > box[1]) * (pts[:, 1] <= box[3])
     return in_box
+
 
 def Sidx(S, lon, lat):
     '''
     return nearest index (i, j) in DEM mesh for point (x, y),
     assuming lon/lat, not projected coordinates
     '''
-    dSx = S.lon[1] - S.lon[0]
-    dSy = S.lat[1] - S.lat[0]
-    i = (np.round((lon - S.lon[0]) / dSx)).astype(int)
-    j = (np.round((lat - S.lat[0]) / dSy)).astype(int)
+    dx = S.lon[1] - S.lon[0]
+    dy = S.lat[1] - S.lat[0]
+    i = (np.round((lon - S.lon[0]) / dx)).astype(int)
+    j = (np.round((lat - S.lat[0]) / dy)).astype(int)
 
     valid = (i < S.lon.shape) * (j < S.lat.shape) * (i >= 0) * (j >= 0)
     return [i, j], valid
 
-def get_elev_from_tiles(x_cpp, y_cpp, tile_list, scale=1.0, valid_range=[-1e3, 1e3]):
+
+def get_elev_from_tiles(x_cpp, y_cpp, tile_list, scale=1.0, valid_range=None):
     '''
     x: vector of x coordinates, assuming cpp;
     y: vector of x coordinates, assuming cpp;
@@ -150,15 +171,21 @@ def get_elev_from_tiles(x_cpp, y_cpp, tile_list, scale=1.0, valid_range=[-1e3, 1
     scale: scale factor for elevation; use -1 to invert the elevation, e.g., for barrier islands
     valid_range: values outside valid elevation range will be set to nan
     '''
+    if valid_range is None:
+        valid_range = [-1e3, 1e3]
 
     lon, lat = cpp2lonlat(x_cpp, y_cpp)
 
-    elevs = np.empty(lon.shape, dtype=float); elevs.fill(np.nan)
+    elevs = np.full_like(lon, np.nan, dtype=float)
     for S in tile_list:
         [j, i], in_box = Sidx(S, lon, lat)
-        idx = (np.isnan(elevs) * in_box).astype(bool)  # only update valid entries that are not already set (i.e. nan at this step) and in DEM box
+
+        # only update valid entries that are not already set (i.e. nan at this step) and in DEM box
+        idx = (np.isnan(elevs) * in_box).astype(bool)
         elevs[idx] = S.elev[i[idx], j[idx]]
-        elevs[(elevs < valid_range[0]) | (elevs > valid_range[1])] = np.nan  # set invalid values to nan
+
+        # set invalid values to nan
+        elevs[(elevs < valid_range[0]) | (elevs > valid_range[1])] = np.nan
 
     if np.isnan(elevs).any():
         # raise ValueError('failed to find elevation')
@@ -166,48 +193,72 @@ def get_elev_from_tiles(x_cpp, y_cpp, tile_list, scale=1.0, valid_range=[-1e3, 1
     else:
         return elevs * scale
 
-def find_parent_box(pts, boxes, i_overlap=False):
-    ndigits = int(math.log10(len(boxes))) + 1  # number of digits needed for representing tile id, e.g., CuDEM (819 tiles) needs 3 digits
+
+def find_parent_box(pts, boxes):
+    '''
+    Find parent boxes for each point in pts,
+    and translate the boxes into a tile code
+
+    Input:
+    - pts: n x 2 array of points
+    - boxes: list of bounding boxes of tiles
+
+    Output:
+    - parent: n x 1 array of tile codes
+    '''
+
+    # number of digits needed for representing tile id, e.g., CuDEM (819 tiles) needs 3 digits
+    ndigits = int(math.log10(len(boxes))) + 1
     parent = np.zeros((len(pts), 1), dtype='int')
     digits = np.zeros((len(pts), 1), dtype='int')
     for j, box in enumerate(boxes):
-        in_box = pts_in_box(pts[:,:2], box)
-        parent[in_box] += ((j+1) * 10.0 ** (digits[in_box])).astype(int)  # save multiple tiles in an integer, e.g.,
-                                                                          # 100101 of CuDEM (819 tiles) means tile 100 and tile 101;
-                                                                          # 12 of CRM (6 tiles) means tile 1 and tile 2;
+        in_box = pts_in_box(pts[:, :2], box)
+        # save multiple tiles in an integer, e.g.,
+        # 100101 of CuDEM (819 tiles) means tile 100 and tile 101
+        # 12 of CRM (6 tiles) means tile 1 and tile 2
+        parent[in_box] += ((j+1) * 10.0 ** (digits[in_box])).astype(int)
         digits[in_box] += ndigits
+
     # plt.hist(parent, bins=len(np.unique(parent)))
     # np.savetxt('thalweg_parent.xyz', np.c_[pts[:,:2], parent])
+
     return parent
 
+
 def tile2dem_file(dem_dict, dem_order, tile_code):
-    DEM_id, tile_id = int(tile_code.real), int(tile_code.imag)
+    '''
+    Interpret tile code to DEM file name
+    '''
+
+    dem_id, tile_id = int(tile_code.real), int(tile_code.imag)
     if tile_id != -1:
-        return dem_dict[dem_order[DEM_id]]['file_list'][tile_id]
+        return dem_dict[dem_order[dem_id]]['file_list'][tile_id]
     else:
         return None
+
 
 def find_thalweg_tile(
     dems_json_file='dems.json',
     thalweg_shp_fname='/sciclone/schism10/feiye/STOFS3D-v5/Inputs/v14/GA_riverstreams_cleaned_utm17N.shp',
     thalweg_buffer=1000,
     cache_folder=None,
-    iNoPrint=True, i_thalweg_cache=False
+    silent=True, i_thalweg_cache=False
 ):
     '''
     Assign thalwegs to DEM tiles
     '''
     # read DEMs
-    with open(dems_json_file) as d:
+    with open(dems_json_file, encoding='utf-8') as d:
         dem_dict = json.load(d)
 
     # get the box of each tile of each DEM
     dem_order = []
-    for k, v in dem_dict.items():
-        if not iNoPrint: print(f"reading dem bounding box: {dem_dict[k]['name']}")
+    for k, _ in dem_dict.items():
+        if not silent:
+            print(f"reading dem bounding box: {dem_dict[k]['name']}")
         dem_order.append(k)
-        if cache_folder is None:
-            cache_folder = os.path.dirname(os.path.abspath(dem_dict[k]['glob_pattern']))  # same as *.shp's folder
+        if cache_folder is None:  # set it to *.shp's folder
+            cache_folder = os.path.dirname(os.path.abspath(dem_dict[k]['glob_pattern']))
 
         # if glob pattern returns any files, put them into the file_list
         dem_dict[k]['file_list'].extend(glob(dem_dict[k]['glob_pattern']))
@@ -219,20 +270,22 @@ def find_thalweg_tile(
 
     # read thalwegs
     print(f'Reading thalwegs from {thalweg_shp_fname} ...')
-    thalweg_shp_fname = thalweg_shp_fname
-    xyz, l2g, curv, perp = get_all_points_from_shp(thalweg_shp_fname, iCache=i_thalweg_cache, cache_folder=cache_folder)
+    xyz, l2g, _, perp = get_all_points_from_shp(
+        thalweg_shp_fname, iCache=i_thalweg_cache, cache_folder=cache_folder)
 
     # find DEM tiles for all thalwegs' points
-    print(f'finding DEM tiles for each thalweg ...')
+    print('Finding DEM tiles for each thalweg ...')
     x_cpp, y_cpp = lonlat2cpp(xyz[:, 0], xyz[:, 1])
     xt_right = x_cpp + thalweg_buffer * np.cos(perp)
     yt_right = y_cpp + thalweg_buffer * np.sin(perp)
     xt_left = x_cpp + thalweg_buffer * np.cos(perp + np.pi)
     yt_left = y_cpp + thalweg_buffer * np.sin(perp + np.pi)
     # find thalweg itself and two search boundaries (one on each side)
-    thalwegs2dems = [find_parent_box(xyz[:,:2], dem_dict[k]['boxes']) for k in dem_dict.keys()]
-    thalwegs_right2dems = [find_parent_box(np.array(cpp2lonlat(xt_right, yt_right)).T, dem_dict[k]['boxes']) for k in dem_dict.keys()]
-    thalwegs_left2dems = [find_parent_box(np.array(cpp2lonlat(xt_left, yt_left)).T, dem_dict[k]['boxes']) for k in dem_dict.keys()]
+    thalwegs2dems = [find_parent_box(xyz[:, :2], dem_dict[k]['boxes']) for k in dem_dict.keys()]
+    thalwegs_right2dems = [
+        find_parent_box(np.array(cpp2lonlat(xt_right, yt_right)).T, dem_dict[k]['boxes']) for k in dem_dict.keys()]
+    thalwegs_left2dems = [
+        find_parent_box(np.array(cpp2lonlat(xt_left, yt_left)).T, dem_dict[k]['boxes']) for k in dem_dict.keys()]
 
     # how many digits in tile numbers
     dems_tile_digits = [int(math.log10(len(dem_dict[k]['boxes'])))+1 for k in dem_dict.keys()]
@@ -243,21 +296,22 @@ def find_thalweg_tile(
     thalwegs = []
     thalwegs_parents = []
     for i, idx in enumerate(l2g):  # enumerate thalwegs
-        line = xyz[idx,:]  # one segment of a thalweg
+        line = xyz[idx, :]  # one segment of a thalweg
         thalwegs.append(line)
 
         thalweg_parents = []  # one thalweg can have parent tiles from all DEM sources
-        for i_dem, [thalwegs2dem, thalwegs_left2dem, thalwegs_right2dem] in enumerate(zip(thalwegs2dems, thalwegs_right2dems, thalwegs_left2dems)):
+        for i_dem, [thalwegs2dem, thalwegs_left2dem, thalwegs_right2dem] in enumerate(
+            zip(thalwegs2dems, thalwegs_right2dems, thalwegs_left2dems)
+        ):
             # find all DEM tiles that a thalweg (including its left and right search boundaries) touches
-            thalweg2dem = np.unique(np.r_[thalwegs2dem[idx], thalwegs_left2dem[idx], thalwegs_right2dem[idx]]).tolist()
+            thalweg2dem = np.unique(
+                np.r_[thalwegs2dem[idx], thalwegs_left2dem[idx], thalwegs_right2dem[idx]]).tolist()
             for dem_code in thalweg2dem:
                 thalweg_parents += [complex(i_dem, x) for x in parse_dem_tiles(dem_code, dems_tile_digits[i_dem])]
-                pass
-            # thalweg_parents += [complex(i_dem, x) for x in thalweg2dem]  # real part is DEM id; complex part is tile id
         thalwegs_parents.append(thalweg_parents)
 
     # Group thalwegs: thalwegs from the same group have the same parent tiles
-    print(f'grouping thalwegs ...')
+    print('Grouping thalwegs ...')
     groups = []
     group_id = 0
     thalweg2group = -np.ones((len(thalwegs)), dtype=int)
@@ -291,14 +345,16 @@ def find_thalweg_tile(
         parents = parents[parents]  # advance family tree
         idx = parents != len(groups)  # get the idx where parent's parent still exists
 
-    idx = grp2large_grp==len(groups)  # where parent's parent is no-existent
+    idx = grp2large_grp == len(groups)  # where parent's parent is non-existent
     grp2large_grp[idx] = np.arange(len(groups)+1)[idx]  # parent group is self
     grp2large_grp = grp2large_grp[:-1]  # remove the dummy group at the end
 
     large_groups = groups[np.unique(grp2large_grp)]
-    if not iNoPrint: print(f'number of groups after reduction: {len(large_groups)}')
+    if not silent:
+        print(f'number of groups after reduction: {len(large_groups)}')
     group_lens = [len(x) for x in large_groups]
-    if not iNoPrint: print(f'group lengths: min {min(group_lens)}; max {max(group_lens)}; mean {np.mean(group_lens)}')
+    if not silent:
+        print(f'group lengths: min {min(group_lens)}; max {max(group_lens)}; mean {np.mean(group_lens)}')
 
     thalweg2group = grp2large_grp[thalweg2group]
     map_grp = dict(zip(np.unique(grp2large_grp), np.arange(len(np.unique(grp2large_grp)))))

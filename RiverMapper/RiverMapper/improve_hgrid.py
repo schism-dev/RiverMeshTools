@@ -655,8 +655,8 @@ def improve_hgrid(gd, prj='esri:102008', skewness_threshold=30, area_threshold=5
     pass
 
 def test():
-    grid_dir = '/sciclone/schism10/Hgrid_projects/RiverInMesh/v2'
-    grid_file = f'{grid_dir}/v2.gr3'
+    grid_dir = '/sciclone/schism10/Hgrid_projects/TMP/'
+    grid_file = f'{grid_dir}/merged.gr3'
 
     # this test may find any potential boundary issues
     gd = cread_schism_hgrid(grid_file)

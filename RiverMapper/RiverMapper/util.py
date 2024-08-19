@@ -106,7 +106,4 @@ def z_decoder(z):
         # loop through each 2-digit group in the decimal part
         decoded_arrays.append(np.array([int(decimal_part_str[j:j+2]) for j in range(0, len(decimal_part_str), 2)]))
 
-    decoded_arrays0 = [np.array([int(decimal_parts_str[i][j:j+2]) for j in range(0, len(decimal_parts_str[i]), 2)]) for i in range(len(decimal_parts_str))]
-    assert np.all([np.all(decoded_arrays[i] == decoded_arrays0[i]) for i in range(len(decoded_arrays))])
-
     return decoded_arrays

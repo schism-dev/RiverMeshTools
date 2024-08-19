@@ -14,7 +14,7 @@ import glob
 import numpy as np
 import re
 import geopandas as gpd
-from RiverMapper.util import silentremove
+from RiverMapper.util import silentremove, z_decoder
 
 
 def lonlat2cpp(lon, lat, lon0=0, lat0=0):
@@ -563,7 +563,9 @@ def replace_shp_pts(inshp_fname, pts, l2g, outshp_fname):
                 feature.shape.points = pts[l2g[i]]
                 w.shape(feature.shape)
 
+
 def extract_quad_polygons(input_fname='test.map', output_fname=None):
+    """extract quad polygons from a SMS map file and write to a new file"""
     if output_fname is None:
         output_fname = os.path.splitext(input_fname)[0] + '.quad.map'
 
@@ -598,12 +600,55 @@ def extract_quad_polygons(input_fname='test.map', output_fname=None):
                             break
 
 
-if __name__ == '__main__':
+def test():
+    """common usage scenarios of the SMS_MAP class"""
+
+    # sample 1
     # my_map = SMS_MAP(filename='test_z.map')
     # my_map.get_xyz()
     # my_map.writer('./test.map')
 
-    # merge_maps(f'/sciclone/schism10/feiye/STOFS3D-v5/Inputs/v14/Parallel/Outputs/CUDEM_merged_thalwegs_1e6_single_fix_simple_sms_cleaned_32cores/*corrected_thalweg*.map', merged_fname=f'/sciclone/schism10/feiye/STOFS3D-v5/Inputs/v14/Parallel/Outputs/CUDEM_merged_thalwegs_1e6_single_fix_simple_sms_cleaned_32cores/total_corrected_thalwegs.map')
+    # sample 2
+    # merge_maps(
+    #     mapfile_glob_str='/sciclone/schism10/feiye/STOFS3D-v5/Inputs/v14/Parallel/Outputs/'
+    #                      'CUDEM_merged_thalwegs_1e6_single_fix_simple_sms_cleaned_32cores/*corrected_thalweg*.map',
+    #     merged_fname='/sciclone/schism10/feiye/STOFS3D-v5/Inputs/v14/Parallel/Outputs/'
+    #                  'CUDEM_merged_thalwegs_1e6_single_fix_simple_sms_cleaned_32cores/total_corrected_thalwegs.map'
+    # )
 
-    extract_quad_polygons(input_fname='/sciclone/schism10/feiye/STOFS3D-v7/Inputs/I18c/tvd_polygons.map')
-    pass
+    # sample 3
+    # extract_quad_polygons(input_fname='/sciclone/schism10/feiye/STOFS3D-v7/Inputs/I18c/tvd_polygons.map')
+
+    # sample 4
+    # make a shapefile from a map, with extra attributes
+    my_map = SMS_MAP(
+        filename='/sciclone/schism10/Hgrid_projects/STOFS3D-v7/'
+                 'v19_RiverMapper/Outputs/bora_v19.1.v19_ie_v18_3_nwm_clipped_in_cudem_missing_tiles_20-core/'
+                 'total_river_arcs_extra.map')
+    my_gdf = my_map.to_GeoDataFrame()
+    # add new columns of river indices and arc indices
+    my_gdf['river_idx'] = -1
+    my_gdf['local_arc_idx'] = -1
+
+    river_idx = 0
+    local_arc_idx = 0
+    # iterate rows in the GeoDataFrame
+    for i, row in my_gdf.iterrows():
+        z = np.array(row['geometry'].coords)[0, -1]
+        z_info = z_decoder(z)
+        nrows = z_info[0][0]
+        my_gdf.at[i, 'river_idx'] = river_idx
+        my_gdf.at[i, 'local_arc_idx'] = local_arc_idx
+
+        local_arc_idx += 1
+        if local_arc_idx == nrows:  # all arcs in a river has been processed
+            river_idx += 1
+            local_arc_idx = 0
+    my_gdf.to_file(
+        '/sciclone/schism10/Hgrid_projects/STOFS3D-v7/v19_RiverMapper/'
+        'Outputs/bora_v19.1.v19_ie_v18_3_nwm_clipped_in_cudem_missing_tiles_20-core/'
+        'total_river_arcs_extra.shp')
+
+
+if __name__ == '__main__':
+    test()

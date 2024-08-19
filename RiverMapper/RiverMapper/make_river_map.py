@@ -837,6 +837,7 @@ def snap_points_to_lines(arc_points, snap_arc_reso):
     # dists is of shape (n_points, n_nearest)
     dists = np.where(dists == 0, np.nan, dists)  # ignore zero distance, i.e., a point is a segment's endpoint
 
+    # todo: RuntimeWarning: All-NaN slice encountered
     dists = np.nanmin(dists, axis=1)  # the smallest non-zero distance of each row is the distance from that point to the nearest segment
     # nan is allowed in dists, because dists >= snap_arc_reso will be used to identify valid points
     target_pt_idx = dists >= snap_arc_reso  # identify valid points, which are not too close to any segment
