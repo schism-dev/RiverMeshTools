@@ -11,6 +11,8 @@ from pylib import schism_grid
 import glob
 import pickle
 
+gdal.UseExceptions()
+
 
 def make_tile_based_on_template(
     newtiles_topleft:np.ndarray,
@@ -58,7 +60,7 @@ def make_tile_based_on_template(
         tif_out = f'{outdir}/ncei19_n{lat_name}_w0{lon_name}_FromCRM.tif'
 
         print(f'output file: {tif_out}')
-        
+
         # write new origin
         shift_x = topleft[0] - gt[0]
         shift_y = topleft[1] - gt[3]
@@ -120,7 +122,7 @@ def find_missing_CuDEM_tiles(
 
     return needed_tiles
 
-    
+
 if __name__ == "__main__":
     tileindex_file = '/sciclone/schism10/feiye/STOFS3D-v5/Inputs/v14/GA_parallel/tileindex_NCEI_ninth_Topobathy_2014.shp'
     gd_fname = '/sciclone/schism10/feiye/STOFS3D-v5/Inputs/I24/hgrid.ll'

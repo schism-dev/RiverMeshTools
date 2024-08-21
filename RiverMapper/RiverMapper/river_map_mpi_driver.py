@@ -31,14 +31,15 @@ from RiverMapper.util import silentremove
 # import warnings
 # warnings.filterwarnings("error", category=UserWarning)
 
-def my_mpi_idx(N, size, rank):
+
+def my_mpi_idx(ntasks, size, rank):
     '''
-    Distribute N tasks to {size} ranks.
-    The return value is a bool vector of the shape (N, ),
+    Distribute ntasks tasks to {size} ranks.
+    The return value is a bool vector of the shape (ntasks, ),
     with True indices indicating tasks for the current rank.
     '''
-    i_my_groups = np.zeros((N, ), dtype=bool)
-    groups = np.array_split(range(N), size)  # n_per_rank, _ = divmod(N, size)
+    i_my_groups = np.zeros((ntasks, ), dtype=bool)
+    groups = np.array_split(range(ntasks), size)  # n_per_rank, _ = divmod(ntasks, size)
     my_group_ids = groups[rank]
     i_my_groups[my_group_ids] = True
     return my_group_ids, i_my_groups
@@ -59,18 +60,24 @@ def rename_single_core_outputs(output_dir):
 
 
 def merge_outputs(output_dir):
-    print(f'\n------------------ merging outputs from all cores --------------\n')
+    '''
+    Merge outputs from all cores
+    '''
+    print('\n------------------ Merging outputs from all cores --------------\n')
     time_merge_start = time.time()
 
     # sms maps
-    total_arcs_map = merge_maps(f'{output_dir}/*_total_arcs.map', merged_fname=f'{output_dir}/total_arcs.map')
+    total_arcs_map = merge_maps(mapfile_glob_str=f'{output_dir}/*_total_arcs.map',
+                                merged_fname=f'{output_dir}/total_arcs.map')
 
-    total_intersection_joints = merge_maps(f'{output_dir}/*intersection_joints*.map', merged_fname=f'{output_dir}/total_intersection_joints.map')
+    total_intersection_joints = merge_maps(
+        mapfile_glob_str=f'{output_dir}/*intersection_joints*.map',
+        merged_fname=f'{output_dir}/total_intersection_joints.map')
     if total_intersection_joints is not None:
         total_intersection_joints = total_intersection_joints.detached_nodes
 
     total_river_map = merge_maps(f'{output_dir}/*river_arcs.map', merged_fname=f'{output_dir}/total_river_arcs.map')
-    total_inner_map = merge_maps(f'{output_dir}/*inner_arcs.map', merged_fname=f'{output_dir}/total_inner_arcs.map')
+    # total_inner_map = merge_maps(f'{output_dir}/*inner_arcs.map', merged_fname=f'{output_dir}/total_inner_arcs.map')
     total_dummy_map = merge_maps(f'{output_dir}/*dummy_arcs.map', merged_fname=f'{output_dir}/total_dummy_arcs.map')
 
     total_river_arcs = None
@@ -89,20 +96,21 @@ def merge_outputs(output_dir):
     # # shapefiles
     river_outline_files = glob(f'{output_dir}/*_river_outline.shp')
     if len(river_outline_files) > 0:
-        gpd.pd.concat([gpd.read_file(x).to_crs('epsg:4326') for x in river_outline_files]).to_file(f'{output_dir}/total_river_outline.shp')
+        gpd.pd.concat([gpd.read_file(x).to_crs('epsg:4326') for x in river_outline_files]).to_file(
+            f'{output_dir}/total_river_outline.shp')
 
     print(f'Merging outputs took: {time.time()-time_merge_start} seconds.')
     return [total_arcs_map, total_intersection_joints, total_river_arcs, total_centerlines, total_dummy_map]
 
 
 def river_map_mpi_driver(
-    dems_json_file = './dems.json',  # files for all DEM tiles
+    dems_json_file='./dems.json',  # files for all DEM tiles
     thalweg_shp_fname='',
-    output_dir = './',
-    river_map_config = None,
-    min_thalweg_buffer = 1000,
-    cache_folder = './Cache/',
-    comm = MPI.COMM_WORLD
+    output_dir='./',
+    river_map_config=None,
+    min_thalweg_buffer=1000,
+    cache_folder='./Cache/',
+    comm=MPI.COMM_WORLD
 ):
     '''
     Driver for the parallel execution of make_river_map.py
@@ -126,20 +134,22 @@ def river_map_mpi_driver(
 
     thalweg_buffer = max(min_thalweg_buffer, river_map_config.optional['river_threshold'][-1])
 
-    # deprecated (fast enough without caching)
-    i_thalweg_cache = False  # Whether or not to read thalweg info from cache.
-                             # The cache file saves coordinates, index, curvature, and direction at all thalweg points
+    # Whether or not to read thalweg info from cache.
+    # The cache file saves coordinates, index, curvature, and direction at all thalweg points
+    i_thalweg_cache = False  # deprecated (fast enough without caching)
+
     # i_grouping_cache: Whether or not to read grouping info from cache,
-    #                   which is useful when the same DEMs and thalweg_shp_fname are used.
-    #                   A cache file named "dems_json_file + thalweg_shp_fname_grouping.cache" will be saved
-    #                   regardless of the option value (the option only controls cache reading).
-    #                   This is usually fast even without reading cache.
+    # which is useful when the same DEMs and thalweg_shp_fname are used.
+    # A cache file named "dems_json_file + thalweg_shp_fname_grouping.cache" will be saved
+    # regardless of the option value (the option only controls cache reading).
+    # This is usually fast even without reading cache.
     i_grouping_cache = True
     cache_folder = Path(cache_folder)
     thalweg_shp_fname = Path(thalweg_shp_fname)
     output_dir = Path(output_dir)
 
-    if dems_json_file is not None:  # accomodate the case when dems_json_file is not provided, e.g., for levees
+    # Sometimes dems_json_file is not provided, e.g., for levees
+    if dems_json_file is not None:
         dems_json_file = Path(dems_json_file)
 
     # configurations (parameters) for make_river_map()
@@ -165,20 +175,22 @@ def river_map_mpi_driver(
 
             if i_grouping_cache:
                 cache_folder.mkdir(parents=True, exist_ok=True)
-                cache_name = Path(f'{cache_folder}/{dems_json_file.name}_{thalweg_shp_fname.name}_grouping.cache')
+                cache_name = Path(
+                    f'{cache_folder}/{dems_json_file.name}_{thalweg_shp_fname.name}_grouping.cache')
                 try:
                     with open(cache_name, 'rb') as file:
-                        print(f'Reading grouping info from cache ...')
+                        print('Reading grouping info from cache ...')
                         thalwegs2tile_groups, tile_groups_files, tile_groups2thalwegs = pickle.load(file)
                 except FileNotFoundError:
-                    print(f"Grouping cache does not exist at {cache_folder}. Cache will be generated after grouping.")
+                    print(f"Grouping cache does not exist at {cache_folder}."
+                          "Cache will be generated after grouping.")
 
             if thalwegs2tile_groups is None:
                 thalwegs2tile_groups, tile_groups_files, tile_groups2thalwegs = find_thalweg_tile(
                     dems_json_file=dems_json_file,
                     thalweg_shp_fname=thalweg_shp_fname,
-                    thalweg_buffer = thalweg_buffer,
-                    iNoPrint=bool(rank), # only rank 0 prints to screen
+                    thalweg_buffer=thalweg_buffer,
+                    silent=bool(rank),  # only rank 0 prints to screen
                     i_thalweg_cache=i_thalweg_cache
                 )
                 if i_grouping_cache:
@@ -189,7 +201,8 @@ def river_map_mpi_driver(
                 raise ValueError(f'No DEM tiles found for the thalwegs in {thalweg_shp_fname}')
         else:  # accomodate the case when dems_json_file is not provided, e.g., for levees
             n_group = size * 10
-            xyz, l2g, curv, perp = get_all_points_from_shp(thalweg_shp_fname, iCache=i_thalweg_cache, cache_folder=cache_folder)
+            _, l2g, _, _ = get_all_points_from_shp(
+                thalweg_shp_fname, iCache=i_thalweg_cache, cache_folder=cache_folder)
             n_thalweg = len(l2g)
             # build groups by evenly dividing n_thalweg thalwegs into n_group groups
             tile_groups2thalwegs = np.array(np.array_split(range(n_thalweg), n_group), dtype=object)
@@ -207,13 +220,15 @@ def river_map_mpi_driver(
     if rank == 0:
         print(f'Thalwegs are divided into {len(tile_groups2thalwegs)} groups.')
         for i, tile_group2thalwegs in enumerate(tile_groups2thalwegs):
-            print(f'[ Group {i} (group id starting from 0) ]-----------------------------------------------------------------------\n' + \
-                  f'Group {i} includes the following thalwegs (idx starts from 0): {tile_group2thalwegs}\n' + \
+            print(f'[ Group {i} (group id starting from 0) ]'
+                  '-----------------------------------------------------------------------\n'
+                  f'Group {i} includes the following thalwegs (idx starts from 0): {tile_group2thalwegs}\n'
                   f'Group {i} needs the following DEMs: {tile_groups_files[i]}\n')
         print(f'Grouping took: {time.time()-time_grouping_start} seconds')
 
     comm.barrier()
-    if rank == 0: print('\n---------------------------------caching DEM tiles---------------------------------\n')
+    if rank == 0:
+        print('\n---------------------------------Caching DEM tiles---------------------------------\n')
     comm.barrier()
 
     # Leveraging MPI to cache DEM tiles in parallel.
@@ -238,31 +253,38 @@ def river_map_mpi_driver(
                 print(f'[Rank: {rank} validated existing cache for {tif_fname}')
 
     comm.Barrier()
-    if rank == 0: print('\n---------------------------------assign groups to each core---------------------------------\n')
+    if rank == 0:
+        print('\n---------------------------------assign groups to each core---------------------------------\n')
     comm.Barrier()
 
-    my_group_ids, i_my_groups = my_mpi_idx(N=len(tile_groups_files), size=size, rank=rank)
+    my_group_ids, i_my_groups = my_mpi_idx(len(tile_groups_files), size, rank)
     my_tile_groups = tile_groups_files[i_my_groups]
     my_tile_groups_thalwegs = tile_groups2thalwegs[i_my_groups]
     print(f'Rank {rank} handles Group {np.squeeze(np.argwhere(i_my_groups))}\n')
 
     comm.Barrier()
-    if rank == 0: print('\n---------------------------------beginning map generation---------------------------------\n')
+    if rank == 0:
+        print('\n---------------------------------beginning map generation---------------------------------\n')
     comm.Barrier()
     time_all_groups_start = time.time()
 
-    for i, (my_group_id, my_tile_group, my_tile_group_thalwegs) in enumerate(zip(my_group_ids, my_tile_groups, my_tile_groups_thalwegs)):
-        # if i > 10: continue  # for testing
+    for i, (my_group_id, my_tile_group, my_tile_group_thalwegs) in enumerate(
+        zip(my_group_ids, my_tile_groups, my_tile_groups_thalwegs)
+    ):
+        if i < 37:
+            continue  # for testing
+
         time_this_group_start = time.time()
         print(f'Rank {rank}: Group {i} (global: {my_group_id}) started ...')
         # update some parameters in the config file
         river_map_config.optional['output_prefix'] = f'Group_{my_group_id}_{rank}_{i}_'
-        river_map_config.optional['mpi_print_prefix'] = f'[Rank {rank}, Group {i+1} of {len(my_tile_groups)}, global: {my_group_id}] '
+        river_map_config.optional['mpi_print_prefix'] = (
+            f'[Rank {rank}, Group {i+1} of {len(my_tile_groups)}, global: {my_group_id}] ')
         river_map_config.optional['selected_thalweg'] = my_tile_group_thalwegs
         make_river_map(
-            tif_fnames = my_tile_group,
-            thalweg_shp_fname = thalweg_shp_fname,
-            output_dir = output_dir,
+            tif_fnames=my_tile_group,
+            thalweg_shp_fname=thalweg_shp_fname,
+            output_dir=output_dir,
             **river_map_config.optional,  # pass all optional parameters with a dictionary
         )
 
@@ -275,35 +297,30 @@ def river_map_mpi_driver(
     # finalize
     if rank == 0:
         # merge outputs from all ranks
-        if size > 1:
-            total_arcs_map, _, _, _, _ = merge_outputs(output_dir)
+        total_arcs_map, _, _, _, _ = merge_outputs(output_dir)
 
-            print(f'\n--------------- final clean-ups --------------------------------------------------------\n')
-            time_final_cleanup_start = time.time()
+        print('\n--------------- Final clean-ups --------------------------------------------------------\n')
+        time_final_cleanup_start = time.time()
 
-            total_arcs_cleaned = clean_arcs(
-                [arc for arc in total_arcs_map.to_GeoDataFrame().geometry.unary_union.geoms],
-                n_clean_iter=river_map_config.optional['n_clean_iter'],
-                snap_point_reso_ratio=river_map_config.optional['snap_point_reso_ratio'],
-                snap_arc_reso_ratio=river_map_config.optional['snap_arc_reso_ratio'],
-            )
+        total_arcs_cleaned = clean_arcs(
+            [arc for arc in total_arcs_map.to_GeoDataFrame().geometry.unary_union.geoms],
+            n_clean_iter=river_map_config.optional['n_clean_iter'],
+            snap_point_reso_ratio=river_map_config.optional['snap_point_reso_ratio'],
+            snap_arc_reso_ratio=river_map_config.optional['snap_arc_reso_ratio'],
+        )
 
-            SMS_MAP(arcs=geos2SmsArcList(total_arcs_cleaned)).writer(filename=f'{output_dir}/total_arcs.map')
+        SMS_MAP(arcs=geos2SmsArcList(total_arcs_cleaned)).writer(filename=f'{output_dir}/total_arcs.map')
 
-            gpd.GeoDataFrame(
-                index=range(len(total_arcs_cleaned)), crs='epsg:4326', geometry=total_arcs_cleaned
-            ).to_file(filename=f'{output_dir}/total_arcs.shp', driver="ESRI Shapefile")
+        gpd.GeoDataFrame(
+            index=range(len(total_arcs_cleaned)), crs='epsg:4326', geometry=total_arcs_cleaned
+        ).to_file(filename=f'{output_dir}/total_arcs.shp', driver="ESRI Shapefile")
 
-            print(f'Final clean-ups took: {time.time()-time_final_cleanup_start} seconds.')
+        print(f'Final clean-ups took: {time.time()-time_final_cleanup_start} seconds.')
 
-            # delete per-core outputs
-            silentremove(glob(f'{output_dir}/Group*'))
-            print(f'>>>>>>>> Total run time: {time.time()-time_start} seconds >>>>>>>>')
-        else:
-            # rename the output files
-            rename_single_core_outputs(output_dir)
+        # delete per-core outputs
+        silentremove(glob(f'{output_dir}/Group*'))
+        print(f'>>>>>>>> Total run time: {time.time()-time_start} seconds >>>>>>>>')
 
         # outputs for OCSMesh
         if river_map_config.optional['i_OCSMesh']:
             output_OCSMesh(output_dir)
-

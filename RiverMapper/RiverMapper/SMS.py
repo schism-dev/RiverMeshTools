@@ -1,152 +1,8 @@
 #!/usr/bin/env python
 """
 This script provides methods of dealing with SMS maps for RiverMapper
-"""
 
-
-from logging import raiseExceptions
-import pickle
-import os
-import numpy as np
-from shapely.geometry import LineString
-# import matplotlib.pyplot as plt
-import glob
-import numpy as np
-import re
-import geopandas as gpd
-from RiverMapper.util import silentremove, z_decoder
-
-
-def lonlat2cpp(lon, lat, lon0=0, lat0=0):
-    R = 6378206.4
-
-    lon_radian, lat_radian = lon/180*np.pi, lat/180*np.pi
-    lon0_radian, lat0_radian = lon0/180*np.pi, lat0/180*np.pi
-
-    xout = R * (lon_radian - lon0_radian) # * np.cos(lat0_radian)
-    yout = R * lat_radian
-
-    return [xout, yout]
-
-def dl_cpp2lonlat(dl, lat0=0):
-    R = 6378206.4
-    lat0_radian = lat0/180*np.pi
-    dlon_radian = dl/R/np.cos(lat0_radian)
-    dlon = dlon_radian*180/np.pi
-    return dlon
-
-    # x0 = 0.0
-    # x1 = dl
-    # y0 = 0.0
-    # y1 = 0.0
-    # lon0, lat0 = cpp2lonlat(x0, y0)
-    # lon1, lat1 = cpp2lonlat(x1, y1)
-    # return abs((lon0-lon1)+1j*(lat0-lat1))
-
-def dl_lonlat2cpp(dl, lat0=0):
-    R = 6378206.4
-    lat0_radian = lat0/180*np.pi
-    dl_radian = dl * np.pi / 180
-    dl_cpp = dl_radian * R * np.cos(lat0_radian)
-    return dl_cpp
-
-def cpp2lonlat(x, y, lon0=0, lat0=0):
-    R = 6378206.4
-
-    lon0_radian, lat0_radian = lon0/180*np.pi, lat0/180*np.pi
-
-    lon_radian = lon0_radian + x/R/np.cos(lat0_radian)
-    lat_radian = y / R
-
-    lon, lat = lon_radian*180/np.pi, lat_radian*180/np.pi
-
-    return [lon, lat]
-
-def curvature(pts):
-    if len(pts[:, 0]) < 3:
-        cur = np.zeros((len(pts[:, 0])))
-    else:
-        dx = np.gradient(pts[:,0]) # first derivatives
-        dy = np.gradient(pts[:,1])
-
-        d2x = np.gradient(dx) #second derivatives
-        d2y = np.gradient(dy)
-
-        cur = np.abs(dx * d2y - d2x * dy) / ((dx * dx + dy * dy)**1.5 + 1e-20)
-
-    return cur
-
-def get_perpendicular_angle(line):
-    line_cplx = np.squeeze(line[:, :2].copy().view(np.complex128))
-    angles = np.angle(np.diff(line_cplx))
-    angle_diff0 = np.diff(angles)
-    angle_diff = np.diff(angles)
-    angle_diff[angle_diff0 > np.pi] -= 2 * np.pi
-    angle_diff[angle_diff0 < -np.pi] += 2 * np.pi
-    perp = angles[:-1] + angle_diff / 2 - np.pi / 2
-    perp = np.r_[angles[0] - np.pi / 2, perp, angles[-1] - np.pi / 2]
-
-    return perp
-
-def normalizeVec(x, y):
-    distance = np.sqrt(x*x+y*y)
-    return x/distance, y/distance
-
-def makeOffsetPoly(oldX, oldY, offset, outer_ccw = 1):
-    num_points = len(oldX)
-    newX = []
-    newY = []
-
-    for curr in range(num_points):
-        prev = (curr + num_points - 1) % num_points
-        next = (curr + 1) % num_points
-
-        vnX =  oldX[next] - oldX[curr]
-        vnY =  oldY[next] - oldY[curr]
-        vnnX, vnnY = normalizeVec(vnX,vnY)
-        nnnX = vnnY
-        nnnY = -vnnX
-
-        vpX =  oldX[curr] - oldX[prev]
-        vpY =  oldY[curr] - oldY[prev]
-        vpnX, vpnY = normalizeVec(vpX,vpY)
-        npnX = vpnY * outer_ccw
-        npnY = -vpnX * outer_ccw
-
-        bisX = (nnnX + npnX) * outer_ccw
-        bisY = (nnnY + npnY) * outer_ccw
-
-        bisnX, bisnY = normalizeVec(bisX,  bisY)
-        bislen = offset /  np.sqrt(1 + nnnX*npnX + nnnY*npnY)
-
-        newX.append(oldX[curr] + bislen * bisnX)
-        newY.append(oldY[curr] + bislen * bisnY)
-
-    return newX, newY
-
-def redistribute(x, y, length=None, num_points=None, iplot=False):
-    line = LineString(np.c_[x, y])
-
-    if length is None and num_points is None:
-      raise Exception("Needs to specify either length or num_points")
-
-    if length is not None:
-        num_points = max(2, int(line.length / length))
-
-    new_points = [line.interpolate(i/float(num_points - 1), normalized=True) for i in range(num_points)]
-    x_subsampled = [p.x for p in new_points]
-    y_subsampled = [p.y for p in new_points]
-
-    # if iplot:
-    #     plt.plot(x, y, '+')
-    #     plt.plot(x_subsampled, y_subsampled, 'o')
-    #     plt.axis('equal')
-    #     plt.show()
-
-    return x_subsampled, y_subsampled, new_points
-
-'''
-<Sample map only containing arcs>
+<Sample SMS map only containing arcs>
 MAP VERSION 8
 BEGCOV
 COVFLDR "Area Property"
@@ -208,7 +64,184 @@ END
 ENDCOV
 BEGTS
 LEND
-'''
+"""
+
+
+import os
+import glob
+import re
+from logging import raiseExceptions
+
+import numpy as np
+from shapely.geometry import LineString
+import geopandas as gpd
+
+from RiverMapper.util import silentremove, z_decoder
+
+
+def lonlat2cpp(lon, lat, lon0=0):
+    """
+    Convert lon, lat to Cartesian coordinates in meters
+    """
+    earth_radius = 6378206.4
+
+    lon_radian, lat_radian = lon/180*np.pi, lat/180*np.pi
+    lon0_radian = lon0 / 180 * np.pi
+
+    xout = earth_radius * (lon_radian - lon0_radian)  # * np.cos(lat0_radian)
+    yout = earth_radius * lat_radian
+
+    return [xout, yout]
+
+
+def cpp2lonlat(x, y, lon0=0, lat0=0):
+    '''
+    Convert Cartesian coordinates in meters to lon, lat
+    '''
+    earth_radius = 6378206.4
+
+    lon0_radian, lat0_radian = lon0 / 180*np.pi, lat0 / 180*np.pi
+
+    lon_radian = lon0_radian + x / earth_radius / np.cos(lat0_radian)
+    lat_radian = y / earth_radius
+
+    lon, lat = lon_radian * 180 / np.pi, lat_radian * 180 / np.pi
+
+    return [lon, lat]
+
+
+def dl_cpp2lonlat(dl, lat0=0):
+    '''
+    Convert Cartesian distance to lon, lat distance
+    '''
+    earth_radius = 6378206.4
+    lat0_radian = lat0 / 180 * np.pi
+    dlon_radian = dl / earth_radius / np.cos(lat0_radian)
+    dlon = dlon_radian * 180 / np.pi
+    return dlon
+
+    # x0 = 0.0
+    # x1 = dl
+    # y0 = 0.0
+    # y1 = 0.0
+    # lon0, lat0 = cpp2lonlat(x0, y0)
+    # lon1, lat1 = cpp2lonlat(x1, y1)
+    # return abs((lon0-lon1)+1j*(lat0-lat1))
+
+
+def dl_lonlat2cpp(dl, lat0=0):
+    '''
+    Convert lon, lat distance to Cartesian distance
+    '''
+    earth_radius = 6378206.4
+    lat0_radian = lat0 / 180 * np.pi
+    dl_radian = dl * np.pi / 180
+    dl_cpp = dl_radian * earth_radius * np.cos(lat0_radian)
+    return dl_cpp
+
+
+def curvature(pts):
+    '''Calculate curvature of a line defined by points,
+    Curvature is 0 for a line with less than 3 points'''
+
+    if len(pts[:, 0]) < 3:
+        cur = np.zeros((len(pts[:, 0])))
+    else:
+        dx = np.gradient(pts[:, 0])  # first derivatives
+        dy = np.gradient(pts[:, 1])
+
+        d2x = np.gradient(dx)  # second derivatives
+        d2y = np.gradient(dy)
+
+        cur = np.abs(dx * d2y - d2x * dy) / ((dx * dx + dy * dy)**1.5 + 1e-20)
+
+    return cur
+
+
+def get_perpendicular_angle(line):
+    '''Get the angle of the perpendicular line at each point of the line'''
+    line_cplx = np.squeeze(line[:, :2].copy().view(np.complex128))
+    angles = np.angle(np.diff(line_cplx))
+    angle_diff0 = np.diff(angles)
+    angle_diff = np.diff(angles)
+    angle_diff[angle_diff0 > np.pi] -= 2 * np.pi
+    angle_diff[angle_diff0 < -np.pi] += 2 * np.pi
+    perp = angles[:-1] + angle_diff / 2 - np.pi / 2
+    perp = np.r_[angles[0] - np.pi / 2, perp, angles[-1] - np.pi / 2]
+
+    return perp
+
+
+def normalize_vec(x, y):
+    """Normalize a vector by its length"""
+    distance = np.sqrt(x*x+y*y)
+    return x/distance, y/distance
+
+
+def make_offset_poly(old_x, old_y, offset, outer_ccw=1):
+    """Make a polygon from a polyline by offsetting it
+    in the perpendicular direction by a distance on both sides"""
+    num_points = len(old_x)
+    new_x = []
+    new_y = []
+
+    for curr in range(num_points):
+        prev_pt = (curr + num_points - 1) % num_points
+        next_pt = (curr + 1) % num_points
+
+        vn_x = old_x[next_pt] - old_x[curr]
+        vn_y = old_y[next_pt] - old_y[curr]
+        vnn_x, vnn_y = normalize_vec(vn_x, vn_y)
+        nnn_x = vnn_y
+        nnn_y = - vnn_x
+
+        vp_x = old_x[curr] - old_x[prev_pt]
+        vp_y = old_y[curr] - old_y[prev_pt]
+        vpn_x, vpn_y = normalize_vec(vp_x, vp_y)
+        npn_x = vpn_y * outer_ccw
+        npn_y = -vpn_x * outer_ccw
+
+        bis_x = (nnn_x + npn_x) * outer_ccw
+        bis_y = (nnn_y + npn_y) * outer_ccw
+
+        bisn_x, bisn_y = normalize_vec(bis_x,  bis_y)
+        bislen = offset / np.sqrt(1 + nnn_x * npn_x + nnn_y * npn_y)
+
+        new_x.append(old_x[curr] + bislen * bisn_x)
+        new_y.append(old_y[curr] + bislen * bisn_y)
+
+    return new_x, new_y
+
+
+def redistribute(x, y, length=None, num_points=None):
+    '''
+    Redistribute points along a line to have equal distance between them
+
+    Inputs:
+    - x, y: coordinates of the line
+    - length: the desired distance between points
+    - num_points: the desired number of points (if length is not specified)
+    '''
+    line = LineString(np.c_[x, y])
+
+    if length is None and num_points is None:
+        raise ValueError('either length or num_points must be specified')
+
+    if length is not None:
+        num_points = max(2, int(line.length / length))
+
+    new_points = [line.interpolate(i/float(num_points - 1), normalized=True) for i in range(num_points)]
+    x_subsampled = [p.x for p in new_points]
+    y_subsampled = [p.y for p in new_points]
+
+    # if iplot:
+    #     plt.plot(x, y, '+')
+    #     plt.plot(x_subsampled, y_subsampled, 'o')
+    #     plt.axis('equal')
+    #     plt.show()
+
+    return x_subsampled, y_subsampled, new_points
+
 
 def merge_maps(mapfile_glob_str, merged_fname):
     if merged_fname is not None:
@@ -499,12 +532,12 @@ class Levee_SMS_MAP(SMS_MAP):
             self.subsampled_centerline_list.append(SMS_ARC(points=np.c_[x_sub, y_sub]))
 
             for offset in offset_list:
-                x_off, y_off = makeOffsetPoly(x_sub, y_sub, offset)
+                x_off, y_off = make_offset_poly(x_sub, y_sub, offset)
                 self.offsetline_list.append(SMS_ARC(points=np.c_[x_off, y_off]))
         return SMS_MAP(arcs=self.subsampled_centerline_list), SMS_MAP(arcs=self.offsetline_list)
 
-def get_all_points_from_shp(fname, iNoPrint=True, iCache=False, cache_folder=None, get_z=False):
-    if not iNoPrint: print(f'reading shapefile: {fname}')
+def get_all_points_from_shp(fname, silent=True, iCache=False, cache_folder=None, get_z=False):
+    if not silent: print(f'reading shapefile: {fname}')
 
     # using geopandas, which seems more efficient than pyshp
     shapefile = gpd.read_file(fname)

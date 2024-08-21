@@ -5,6 +5,7 @@ This script provides classes and methods for processing tif files.
 
 import os
 from glob import glob
+from pathlib import Path
 import errno
 import copy
 import pickle
@@ -14,13 +15,21 @@ from dataclasses import dataclass
 
 import numpy as np
 from osgeo import gdal
+import geopandas as gpd
+from shapely import Polygon
+import rasterio
+from rasterio.features import rasterize
+from rasterio.transform import from_origin
 
 from RiverMapper.SMS import lonlat2cpp, cpp2lonlat, get_all_points_from_shp
 from RiverMapper.util import silentremove
 
 
+gdal.UseExceptions()
+
+
 @dataclass
-class dem_data():
+class DemData():
     '''
     Simple class to store DEM data
     '''
@@ -31,6 +40,94 @@ class dem_data():
     elev: np.ndarray
     dx: float
     dy: float
+
+
+def gen_splitter(dem_box, dl, overlap_ratio=0.01, crs='EPSG:4326'):
+    '''
+    Generate a splitter for splitting a large DEM file into smaller tiles
+
+    Input:
+    - dem_box: bounding box of the DEM file, [xmin, ymin, xmax, ymax]
+    - dl: side length of each square tile
+    - overlap_ratio: overlap ratio between tiles
+
+    Output:
+    - splitter: list of bounding boxes of tiles
+    '''
+    splitter = []
+    for x in np.arange(dem_box[0], dem_box[2], dl):
+        for y in np.arange(dem_box[1], dem_box[3], dl):
+            splitter.append([
+                x - dl * overlap_ratio, y - dl * overlap_ratio,
+                x + dl + dl * overlap_ratio, y + dl + dl * overlap_ratio
+            ])
+
+    # make a gpd dataframe for the splitter
+    gdf = gpd.GeoDataFrame(
+        geometry=[Polygon([(x[0], x[1]), (x[2], x[1]), (x[2], x[3]), (x[0], x[3])]) for x in splitter], crs=crs)
+
+    return splitter, gdf
+
+
+def split_vector_shp(shp_fname, splitter_gdf, outdir='./split/'):
+    '''
+    Split a vector shapefile into smaller tiles
+
+    Inputs:
+    - shp_fname: input shapefile name, consisting vectors such as linestrings or polygons
+    - splitter_gdf: a GeoDataFrame of bounding boxes of tiles
+    - outdir: output directory
+    '''
+
+    shp_fname = Path(shp_fname)
+    outdir = Path(outdir)
+    outdir.mkdir(parents=True, exist_ok=True)
+
+    input_shp_gdf = gpd.read_file(shp_fname)
+
+    split_shp_fnames = []
+    for i, splitter in enumerate(splitter_gdf.geometry):
+        clipped_gdf = gpd.clip(input_shp_gdf, splitter)
+        if clipped_gdf.empty:
+            print(f'skip empty tile {i}')
+            continue
+        split_shp_fnames.append(f'{outdir}/{shp_fname.stem}_{i}.shp')
+        clipped_gdf.to_file(split_shp_fnames[-1])
+
+    return split_shp_fnames
+
+
+def rasterize_shp(shp_fname, burn_value=-1, pixel_size=2e-5):
+    '''
+    Rasterize a shapefile into a tif file
+
+    Inputs:
+    -burn_value: value to burn into the rasterized tif file
+    -dl: resolution of the tif file in degrees
+    '''
+    shp_fname = Path(shp_fname)
+
+    gdf = gpd.read_file(shp_fname)
+
+    # Define raster properties
+    minx, miny, maxx, maxy = gdf.total_bounds  # Get the bounding box of the shapefile
+    width = int((maxx - minx) / pixel_size)
+    height = int((maxy - miny) / pixel_size)
+    transform = from_origin(minx, maxy, pixel_size, pixel_size)  # Transform for rasterization
+
+    # Prepare a list of geometries and values
+    shapes = [(geom, burn_value) for geom in gdf.geometry]  # Inside value is -1
+
+    # Rasterize the polygons
+    raster = rasterize(
+        shapes, out_shape=(height, width), transform=transform, fill=0, dtype='int16')
+
+    # Save the raster to a file
+    with rasterio.open(
+        shp_fname.with_suffix(".tif"), 'w', driver='GTiff', height=height, width=width,
+        count=1, dtype='int16', crs=gdf.crs, transform=transform,
+    ) as dst:
+        dst.write(raster, 1)
 
 
 def parse_dem_tiles(dem_code, dem_tile_digits):
@@ -69,7 +166,7 @@ def get_tif_box(tif_fname=None):
 
 def Tif2XYZ(tif_fname=None, cache=True):
     '''
-    Read a tif file and return a dem_data object,
+    Read a tif file and return a DemData object,
     which includes x, y, lon, lat, z, dx, dy
     '''
     is_new_cache = False
@@ -79,8 +176,8 @@ def Tif2XYZ(tif_fname=None, cache=True):
     if cache:
         try:
             with open(cache_name, 'rb') as f:
-                S = pickle.load(f)
-                return [S, is_new_cache]  # cache successfully read
+                dem_data = pickle.load(f)
+                return [dem_data, is_new_cache]  # cache successfully read
         except (ModuleNotFoundError, AttributeError) as e:
             print(f'Warning: failed to read cache: {e}')
             print('removing existing cache and regenerating it ...')
@@ -117,14 +214,14 @@ def Tif2XYZ(tif_fname=None, cache=True):
 
     ds = None  # close dataset
 
-    S = dem_data(xp, yp, xp, yp, z, dx, dy)
+    dem_data = DemData(xp, yp, xp, yp, z, dx, dy)
 
     if cache:
         with open(cache_name, 'wb') as f:
-            pickle.dump(S, f, protocol=pickle.HIGHEST_PROTOCOL)
+            pickle.dump(dem_data, f, protocol=pickle.HIGHEST_PROTOCOL)
         is_new_cache = True
 
-    return [S, is_new_cache]  # already_cached = False
+    return [dem_data, is_new_cache]  # already_cached = False
 
 
 def reproject_tifs(tif_files: list, src_crs='EPSG:4326', dst_crs='EPSG:26917', outdir='./'):
@@ -149,17 +246,17 @@ def pts_in_box(pts, box):
     return in_box
 
 
-def Sidx(S, lon, lat):
+def get_pt_idx_from_tile(dem_data, lon, lat):
     '''
     return nearest index (i, j) in DEM mesh for point (x, y),
     assuming lon/lat, not projected coordinates
     '''
-    dx = S.lon[1] - S.lon[0]
-    dy = S.lat[1] - S.lat[0]
-    i = (np.round((lon - S.lon[0]) / dx)).astype(int)
-    j = (np.round((lat - S.lat[0]) / dy)).astype(int)
+    dx = dem_data.lon[1] - dem_data.lon[0]
+    dy = dem_data.lat[1] - dem_data.lat[0]
+    i = (np.round((lon - dem_data.lon[0]) / dx)).astype(int)
+    j = (np.round((lat - dem_data.lat[0]) / dy)).astype(int)
 
-    valid = (i < S.lon.shape) * (j < S.lat.shape) * (i >= 0) * (j >= 0)
+    valid = (i < dem_data.lon.shape) * (j < dem_data.lat.shape) * (i >= 0) * (j >= 0)
     return [i, j], valid
 
 
@@ -167,7 +264,7 @@ def get_elev_from_tiles(x_cpp, y_cpp, tile_list, scale=1.0, valid_range=None):
     '''
     x: vector of x coordinates, assuming cpp;
     y: vector of x coordinates, assuming cpp;
-    tile_list: list of DEM tiles (in dem_data type, defined in river_map_tif_preproc)
+    tile_list: list of DEM tiles (in DemData type, defined in river_map_tif_preproc)
     scale: scale factor for elevation; use -1 to invert the elevation, e.g., for barrier islands
     valid_range: values outside valid elevation range will be set to nan
     '''
@@ -177,12 +274,12 @@ def get_elev_from_tiles(x_cpp, y_cpp, tile_list, scale=1.0, valid_range=None):
     lon, lat = cpp2lonlat(x_cpp, y_cpp)
 
     elevs = np.full_like(lon, np.nan, dtype=float)
-    for S in tile_list:
-        [j, i], in_box = Sidx(S, lon, lat)
+    for dem_data in tile_list:
+        [j, i], in_box = get_pt_idx_from_tile(dem_data, lon, lat)
 
         # only update valid entries that are not already set (i.e. nan at this step) and in DEM box
         idx = (np.isnan(elevs) * in_box).astype(bool)
-        elevs[idx] = S.elev[i[idx], j[idx]]
+        elevs[idx] = dem_data.elev[i[idx], j[idx]]
 
         # set invalid values to nan
         elevs[(elevs < valid_range[0]) | (elevs > valid_range[1])] = np.nan
@@ -374,3 +471,24 @@ def find_thalweg_tile(
     # plt.show()
 
     return thalweg2large_group, large_groups_files, np.array(large_group2thalwegs, dtype=object)
+
+
+def test():
+    '''temporary test function'''
+    input_shp_fname = Path('/sciclone/schism10/Hgrid_projects/STOFS3D-v8/v20p2s2_RiverMapper/'
+                           'shapefiles/nhdareas_ms_la_clipped4.shp')
+
+    dem_box = gpd.read_file(input_shp_fname).total_bounds
+    _, splitter_gdf = gen_splitter(dem_box, dl=0.5, overlap_ratio=0.01)
+
+    outdir = Path(f'{input_shp_fname.parent}/{input_shp_fname.stem}_split/')
+    outdir.mkdir(parents=True, exist_ok=True)
+
+    split_shps = split_vector_shp(input_shp_fname, splitter_gdf, outdir)
+    for split_shp in split_shps:
+        rasterize_shp(split_shp)
+    print('Done!')
+
+
+if __name__ == '__main__':
+    test()

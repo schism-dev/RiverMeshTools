@@ -403,7 +403,13 @@ def set_eta_thalweg(x, y, z, coastal_z=[0.0, 3.0], const_depth=1.0):
     # smooth bathymetry along thalweg because the elevation is smoother than bathymetry
     mean_dl = np.mean(get_dist_increment(np.c_[x, y]))
     z_fixed = fill_missing_values(z, np.argwhere(zscore(z) > 2)[:, 0])  # remove outliers, nEw
-    z_smooth = moving_average(z_fixed, n=int(max(100.0/(mean_dl+1e-6), 10)), self_weights=0)  # at least 10 points average to make it smooth
+    if z_fixed is None:
+        print(f'z: {z}')
+        print(f'zscore(z): {zscore(z)}')
+        raise ValueError('Failed to fill missing values in bathymetry')
+
+    # at least 10 points average to make it smooth
+    z_smooth = moving_average(z_fixed, n=int(max(100.0/(mean_dl+1e-6), 10)), self_weights=0)
 
     # coastal (deep): assume zero
     idx = z_smooth <= coastal_z[0]
@@ -1559,12 +1565,16 @@ def make_river_map(
             x_banks_left, y_banks_left, x_banks_right, y_banks_right, perp, width = \
                 get_two_banks(S_list, thalweg, thalweg_eta, search_length, search_steps,
                               min_width=river_threshold[0], elev_scale=elev_scale)
+            if width is None:
+                print(f"{mpi_print_prefix} warning: banks not found for thalweg {i+1} after redistribution, skipping ...")
+                continue
 
             # correct thalwegs
             if elev_scale < 0:  # invert z for barrier island
                 search_length_for_correction = river_threshold[-1] * 1.1
-            else:  # assuming the original average width is correct, which is not always true;
-                   # however, a larger search length can lead to over-correcting the thalwegs to adjacent channels
+            else:
+                # normal case: assuming the original average width is correct, which is not always true;
+                # however, a larger search length can lead to over-correcting the thalwegs to adjacent channels
                 search_length_for_correction = moving_average(width, n=10) * 0.5
             thalweg, is_corrected = improve_thalwegs(S_list, dl, thalweg, search_length_for_correction, perp, mpi_print_prefix, elev_scale=elev_scale)
             if not is_corrected:
