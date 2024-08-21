@@ -12,7 +12,8 @@ COVID 26200
 COVGUID 57a1fdc1-d908-44d3-befe-8785288e69e7
 COVATTS VISIBLE 1
 COVATTS ACTIVECOVERAGE Area Property
-COV_WKT GEOGCS["GCS_WGS_1984",DATUM["WGS84",SPHEROID["WGS84",6378137,298.257223563]],PRIMEM["Greenwich",0],UNIT["Degree",0.017453292519943295]]END_COV_WKT
+COV_WKT GEOGCS["GCS_WGS_1984",DATUM["WGS84",SPHEROID["WGS84",6378137,298.257223563]],\
+PRIMEM["Greenwich",0],UNIT["Degree",0.017453292519943295]]END_COV_WKT
 COV_VERT_DATUM 0
 COV_VERT_UNITS 0
 COVATTS PROPERTIES MESH_GENERATION
@@ -70,7 +71,6 @@ LEND
 import os
 import glob
 import re
-from logging import raiseExceptions
 
 import numpy as np
 from shapely.geometry import LineString
@@ -244,6 +244,8 @@ def redistribute(x, y, length=None, num_points=None):
 
 
 def merge_maps(mapfile_glob_str, merged_fname):
+    '''Merge multiple SMS maps into one map file'''
+
     if merged_fname is not None:
         silentremove(merged_fname)
 
@@ -252,8 +254,8 @@ def merge_maps(mapfile_glob_str, merged_fname):
         map_list = [SMS_MAP(filename=map_file) for map_file in map_file_list]
 
         total_map = map_list[0]
-        for i, map in enumerate(map_list[1:]):
-            total_map += map
+        for this_map in map_list[1:]:
+            total_map += this_map
         total_map.writer(merged_fname)
     else:
         # print(f'warning: outputs do not exist: {mapfile_glob_str}, abort writing to map')
@@ -279,11 +281,11 @@ class SMS_ARC():
             node_idx = [0, -1]
 
         if src_prj is None:
-            raise Exception('source projection not specified when initializing SMS_ARC')
+            raise ValueError('source projection not specified when initializing SMS_ARC')
 
         if src_prj == 'cpp' and dst_prj == 'epsg:4326':
-            points[:, 0], points[: ,1] = cpp2lonlat(points[:, 0], points[: ,1])
-            if points.shape[1] == 3 and proj_z == True:
+            points[:, 0], points[:, 1] = cpp2lonlat(points[:, 0], points[:, 1])
+            if points.shape[1] == 3 and proj_z:
                 points[:, 2] = dl_cpp2lonlat(points[:, 2], lat0=points[:, 1])
 
         npoints, ncol = points.shape
@@ -298,8 +300,11 @@ class SMS_ARC():
         self.arc_hat_length = -1
 
     def make_hats(self, arc_hat_length=-1):
+        '''
+        Make hats at the ends of the arc (deprecated)
+        '''
         if arc_hat_length <= 0:
-            raise Exception('Arc hat length <= 0')
+            raise ValueError('Arc hat length <= 0')
         else:
             self.arc_hat_length = arc_hat_length
 
@@ -327,6 +332,7 @@ class SMS_ARC():
 
         return [SMS_ARC(points=self.arc_hats[:2, :]), SMS_ARC(points=self.arc_hats[2:, :])]
 
+
 class SMS_MAP():
     '''class for manipulating SMS maps'''
     def __init__(self, filename=None, arcs=None, detached_nodes=None, epsg=4326):
@@ -336,6 +342,10 @@ class SMS_MAP():
         self.nodes = None  # expecting to be a 2D array of shape (n_nodes, 3)
         self.detached_nodes = None  # expecting to be a 2D array of shape (n_detached_nodes, 3)
         self.valid = True
+        self.n_xyz = None  # number of all points in all arcs and detached nodes
+        self.xyz = None  # coordinates of all arcs and detached nodes, shape (n_xyz, 3)
+        self.l2g = None  # local-to-global node indices mapping, i.e.,
+        # l2g[i] contains a list of global indices of the ith arc
 
         # read from file if filename is provided
         if filename is not None:
@@ -345,25 +355,25 @@ class SMS_MAP():
         # otherwise, initialize from arcs and detached_nodes
         if arcs is None:
             self.arcs = []
-        elif type(arcs) == list:
+        elif isinstance(arcs, list):
             arcs = [arc for arc in arcs if arc is not None]
             self.arcs = arcs
-        elif type(arcs) == np.ndarray:
+        elif isinstance(arcs, np.ndarray):
             self.arcs = np.squeeze(arcs).tolist()
 
         if detached_nodes is None:
             self.detached_nodes = np.zeros((0, 3), dtype=float)
-        elif type(detached_nodes) == list:
+        elif isinstance(detached_nodes, list):
             detached_nodes = [node for node in detached_nodes if node is not None]
             self.detached_nodes = np.array(detached_nodes)
-        elif type(detached_nodes) == np.ndarray:
+        elif isinstance(detached_nodes, np.ndarray):
             self.detached_nodes = detached_nodes
 
         self.epsg = epsg
 
         if self.arcs == [] and len(self.detached_nodes) == 0:
             self.valid = False
-        elif np.all(np.array(self.arcs) == None) and np.all(self.detached_nodes == None):
+        elif np.all(np.array(self.arcs) is None) and np.all(self.detached_nodes is None):
             self.valid = False
         else:
             self.valid = True
@@ -374,6 +384,9 @@ class SMS_MAP():
         return SMS_MAP(arcs=self.arcs, detached_nodes=self.detached_nodes, epsg=self.epsg)
 
     def get_xyz(self):
+        """Get xyz coordinates of all arcs and detached nodes,
+        and local-to-global node indices mapping"""
+
         self.n_xyz = 0
         self.l2g = []
 
@@ -388,6 +401,8 @@ class SMS_MAP():
         return self.xyz, self.l2g
 
     def reader(self, filename='test.map'):
+        '''Read SMS map file and store information in the class attributes'''
+
         self.n_glb_nodes = 0
         self.n_arcs = 0
         self.n_detached_nodes = 0
@@ -395,7 +410,7 @@ class SMS_MAP():
         arc_nodes = []
         self.detached_nodes = np.zeros((0, 3), dtype=float)
         self.nodes = np.zeros((0, 3), dtype=float)
-        with open(filename) as f:
+        with open(filename, 'r', encoding='utf-8') as f:
             while True:
                 line = f.readline()
                 if not line:
@@ -406,17 +421,21 @@ class SMS_MAP():
                     if "WGS_1984" in line:
                         self.epsg = 4326
                     else:
-                        raiseExceptions('unkown epsg')
+                        raise ValueError(f'Projection not supported: {line}')
                 elif strs[0] == 'NODE':
                     line = f.readline()
                     strs = re.split(' +', line.strip())
                     self.n_glb_nodes += 1
-                    self.nodes = np.append(self.nodes, np.reshape([float(strs[1]), float(strs[2]), float(strs[3])], (1,3)), axis=0)
+                    self.nodes = np.append(
+                        self.nodes,
+                        np.reshape([float(strs[1]), float(strs[2]), float(strs[3])], (1, 3)), axis=0)
                 elif line.strip() == 'POINT':
                     line = f.readline()
                     strs = re.split(' +', line.strip())
                     self.n_detached_nodes += 1
-                    self.detached_nodes = np.append(self.detached_nodes, np.reshape([float(strs[1]), float(strs[2]), float(strs[3])], (1,3)), axis=0)
+                    self.detached_nodes = np.append(
+                        self.detached_nodes,
+                        np.reshape([float(strs[1]), float(strs[2]), float(strs[3])], (1, 3)), axis=0)
                 elif line.strip() == 'ARC':
                     self.n_arcs += 1
                 elif strs[0] == 'NODES':
@@ -433,10 +452,9 @@ class SMS_MAP():
                     self.arcs.append(this_arc)
                     arc_nodes.append(this_arc_node_idx[0])
                     arc_nodes.append(this_arc_node_idx[1])
-        pass
 
     def writer(self, filename='test.map'):
-        import os
+        '''Write SMS map file from the class attributes'''
 
         if not self.valid:
             print(f'No features found in map, aborting writing to {filename}')
@@ -446,7 +464,7 @@ class SMS_MAP():
         if not os.path.exists(fpath):
             os.makedirs(fpath, exist_ok=True)
 
-        with open(filename, 'w') as f:
+        with open(filename, 'w', encoding='utf-8') as f:
             # write header
             f.write('MAP VERSION 8\n')
             f.write('BEGCOV\n')
@@ -458,11 +476,22 @@ class SMS_MAP():
             f.write('COVATTS VISIBLE 1\n')
             f.write('COVATTS ACTIVECOVERAGE Area Property\n')
             if self.epsg == 4326:
-                f.write('COV_WKT GEOGCS["GCS_WGS_1984",DATUM["WGS84",SPHEROID["WGS84",6378137,298.257223563]],PRIMEM["Greenwich",0],UNIT["Degree",0.017453292519943295]]END_COV_WKT \n')
+                f.write('COV_WKT GEOGCS["GCS_WGS_1984",DATUM["WGS84",SPHEROID["WGS84",6378137,298.257223563]],'
+                        'PRIMEM["Greenwich",0],UNIT["Degree",0.017453292519943295]]END_COV_WKT \n')
+
             elif self.epsg == 26918:
-                f.write('COV_WKT PROJCS["NAD83 / UTM zone 18N",GEOGCS["NAD83",DATUM["North_American_Datum_1983",SPHEROID["GRS 1980",6378137,298.257222101,AUTHORITY["EPSG","7019"]],TOWGS84[0,0,0,0,0,0,0],AUTHORITY["EPSG","6269"]],PRIMEM["Greenwich",0,AUTHORITY["EPSG","8901"]],UNIT["degree",0.0174532925199433,AUTHORITY["EPSG","9122"]],AUTHORITY["EPSG","4269"]],PROJECTION["Transverse_Mercator"],PARAMETER["latitude_of_origin",0],PARAMETER["central_meridian",-75],PARAMETER["scale_factor",0.9996],PARAMETER["false_easting",500000],PARAMETER["false_northing",0],UNIT["metre",1,AUTHORITY["EPSG","9001"]],AXIS["Easting",EAST],AXIS["Northing",NORTH],AUTHORITY["EPSG","26918"]]END_COV_WKT')
+                f.write('COV_WKT PROJCS["NAD83 / UTM zone 18N",GEOGCS["NAD83",DATUM["North_American_Datum_1983",'
+                        'SPHEROID["GRS 1980",6378137,298.257222101,AUTHORITY["EPSG","7019"]],'
+                        'TOWGS84[0,0,0,0,0,0,0],AUTHORITY["EPSG","6269"]],'
+                        'PRIMEM["Greenwich",0,AUTHORITY["EPSG","8901"]],'
+                        'UNIT["degree",0.0174532925199433,AUTHORITY["EPSG","9122"]],'
+                        'AUTHORITY["EPSG","4269"]],PROJECTION["Transverse_Mercator"],'
+                        'PARAMETER["latitude_of_origin",0],PARAMETER["central_meridian",-75],'
+                        'PARAMETER["scale_factor",0.9996],PARAMETER["false_easting",500000],'
+                        'PARAMETER["false_northing",0],UNIT["metre",1,AUTHORITY["EPSG","9001"]],'
+                        'AXIS["Easting",EAST],AXIS["Northing",NORTH],AUTHORITY["EPSG","26918"]]END_COV_WKT')
             else:
-                raiseExceptions("Projection not supported.")
+                raise ValueError(f'Projection not supported: {self.epsg}')
             f.write('COV_VERT_DATUM 0\n')
             f.write('COV_VERT_UNITS 0\n')
             f.write('COVATTS PROPERTIES MESH_GENERATION\n')
@@ -503,15 +532,18 @@ class SMS_MAP():
             f.write('ENDCOV\n')
             f.write('BEGTS\n')
             f.write('LEND\n')
-            pass
 
     def to_GeoDataFrame(self):
+        '''Convert the SMS map to a GeoDataFrame'''
         return gpd.GeoDataFrame(geometry=[LineString(line.points) for line in self.arcs if line is not None])
 
     def to_LineStringList(self):
+        '''Convert the SMS map to a list of LineStrings'''
         return [LineString(line.points) for line in self.arcs if line is not None]
 
+
 class Levee_SMS_MAP(SMS_MAP):
+    '''class for manipulating levee maps, which are derived from SMS maps'''
     def __init__(self, arcs=None, epsg=4326):
         if arcs is None:
             arcs = []
@@ -522,6 +554,7 @@ class Levee_SMS_MAP(SMS_MAP):
         self.offsetline_list = []
 
     def make_levee_maps(self, offset_list=None, subsample=None):
+        '''Make levee maps from the centerline arcs by subsampling and offsetting'''
         if offset_list is None:
             offset_list = [-5, 5, -15, 15]
         if subsample is None:
@@ -536,8 +569,12 @@ class Levee_SMS_MAP(SMS_MAP):
                 self.offsetline_list.append(SMS_ARC(points=np.c_[x_off, y_off]))
         return SMS_MAP(arcs=self.subsampled_centerline_list), SMS_MAP(arcs=self.offsetline_list)
 
-def get_all_points_from_shp(fname, silent=True, iCache=False, cache_folder=None, get_z=False):
-    if not silent: print(f'reading shapefile: {fname}')
+
+def get_all_points_from_shp(fname, silent=True, get_z=False):
+    '''Read all points from a shapefile and calculate curvature and perpendicular angles at each point'''
+
+    if not silent:
+        print(f'reading shapefile: {fname}')
 
     # using geopandas, which seems more efficient than pyshp
     shapefile = gpd.read_file(fname)
@@ -546,7 +583,7 @@ def get_all_points_from_shp(fname, silent=True, iCache=False, cache_folder=None,
     for i in range(shapefile.shape[0]):
         try:
             shp_points = np.array(shapefile.iloc[i, :]['geometry'].coords.xy).shape[1]
-        except:
+        except AttributeError:  # nEw
             print(f"warning: shape {i+1} of {shapefile.shape[0]} is invalid")
             continue
         npts += shp_points
@@ -556,12 +593,14 @@ def get_all_points_from_shp(fname, silent=True, iCache=False, cache_folder=None,
         xyz = np.zeros((npts, 3), dtype=float)
     else:
         xyz = np.zeros((npts, 2), dtype=float)
-    shape_pts_l2g =[None] * nvalid_shps
-    ptr = 0; ptr_shp = 0
+
+    shape_pts_l2g = [None] * nvalid_shps
+    ptr = 0
+    ptr_shp = 0
     for i in range(shapefile.shape[0]):
         try:
             shp_points = np.array(shapefile.iloc[i, :]['geometry'].coords.xy).shape[1]
-        except:
+        except AttributeError:  # nEw
             print(f"warning: shape {i+1} of {shapefile.shape[0]} is invalid")
             continue
 
@@ -569,11 +608,12 @@ def get_all_points_from_shp(fname, silent=True, iCache=False, cache_folder=None,
             xyz[ptr:ptr+shp_points] = np.array(shapefile.iloc[i, :]['geometry'].coords)
         else:
             xyz[ptr:ptr+shp_points] = np.array(shapefile.iloc[i, :]['geometry'].coords.xy).T
-            # todo: xyz = np.array(shapefile.iloc[i, :]['geometry'].coords)[:, :2]  # more efficient
+            # todo, this is more efficient: xyz = np.array(shapefile.iloc[i, :]['geometry'].coords)[:, :2]
         shape_pts_l2g[ptr_shp] = np.array(np.arange(ptr, ptr+shp_points))
-        ptr += shp_points; ptr_shp += 1;
+        ptr += shp_points
+        ptr_shp += 1
     if ptr != npts or ptr_shp != nvalid_shps:
-        raise Exception("number of shapes/points does not match")
+        raise ValueError("number of shapes/points does not match")
 
     curv = np.empty((npts, ), dtype=float)
     perp = np.empty((npts, ), dtype=float)
@@ -584,33 +624,22 @@ def get_all_points_from_shp(fname, silent=True, iCache=False, cache_folder=None,
 
     return xyz, shape_pts_l2g, curv, perp
 
-def replace_shp_pts(inshp_fname, pts, l2g, outshp_fname):
-    sf = shapefile.Reader(inshp_fname)
-    shapes = sf.shapes()
-
-    with shapefile.Writer(outshp_fname) as w:
-        w.fields = sf.fields[1:] # skip first deletion field
-        for i, feature in enumerate(sf.iterShapeRecords()): # iteration on both record and shape for a feature
-            if len(l2g[i]) > 0:
-                w.record(*feature.record) # * for unpacking tuple
-                feature.shape.points = pts[l2g[i]]
-                w.shape(feature.shape)
-
 
 def extract_quad_polygons(input_fname='test.map', output_fname=None):
     """extract quad polygons from a SMS map file and write to a new file"""
+
     if output_fname is None:
         output_fname = os.path.splitext(input_fname)[0] + '.quad.map'
 
-    with open(output_fname, 'w') as fout:
+    with open(output_fname, 'w', encoding='utf-8') as fout:
         lines_buffer = []
-        iPatch = False
+        is_patch = False
 
-        n_read = 0
-        with open(input_fname) as f:
+        with open(input_fname, 'r', encoding='utf-8') as f:
             while True:
                 line = f.readline()
-                if not line: break
+                if not line:
+                    break
                 strs = re.split(' +', line.strip())
 
                 if strs[0] != 'POLYGON':
@@ -622,12 +651,12 @@ def extract_quad_polygons(input_fname='test.map', output_fname=None):
                         strs = re.split(' +', line.strip())
                         lines_buffer.append(line)
                         if strs[0] == 'PATCH':
-                            iPatch = True
+                            is_patch = True
                         elif strs[0] == 'END':
-                            if iPatch:
+                            if is_patch:
                                 for line_buffer in lines_buffer:
                                     fout.write(line_buffer)
-                                iPatch = False
+                                is_patch = False
                                 fout.flush()
                             lines_buffer = []
                             break
