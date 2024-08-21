@@ -271,8 +271,8 @@ def river_map_mpi_driver(
     for i, (my_group_id, my_tile_group, my_tile_group_thalwegs) in enumerate(
         zip(my_group_ids, my_tile_groups, my_tile_groups_thalwegs)
     ):
-        if i < 37:
-            continue  # for testing
+        # if i < 37:
+        #     continue  # for testing
 
         time_this_group_start = time.time()
         print(f'Rank {rank}: Group {i} (global: {my_group_id}) started ...')
