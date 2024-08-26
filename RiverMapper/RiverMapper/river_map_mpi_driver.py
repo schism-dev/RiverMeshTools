@@ -201,8 +201,7 @@ def river_map_mpi_driver(
                 raise ValueError(f'No DEM tiles found for the thalwegs in {thalweg_shp_fname}')
         else:  # accomodate the case when dems_json_file is not provided, e.g., for levees
             n_group = size * 10
-            _, l2g, _, _ = get_all_points_from_shp(
-                thalweg_shp_fname, iCache=i_thalweg_cache, cache_folder=cache_folder)
+            _, l2g, _, _ = get_all_points_from_shp(thalweg_shp_fname)
             n_thalweg = len(l2g)
             # build groups by evenly dividing n_thalweg thalwegs into n_group groups
             tile_groups2thalwegs = np.array(np.array_split(range(n_thalweg), n_group), dtype=object)

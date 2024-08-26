@@ -367,8 +367,7 @@ def find_thalweg_tile(
 
     # read thalwegs
     print(f'Reading thalwegs from {thalweg_shp_fname} ...')
-    xyz, l2g, _, perp = get_all_points_from_shp(
-        thalweg_shp_fname, iCache=i_thalweg_cache, cache_folder=cache_folder)
+    xyz, l2g, _, perp = get_all_points_from_shp(thalweg_shp_fname)
 
     # find DEM tiles for all thalwegs' points
     print('Finding DEM tiles for each thalweg ...')
@@ -473,10 +472,10 @@ def find_thalweg_tile(
     return thalweg2large_group, large_groups_files, np.array(large_group2thalwegs, dtype=object)
 
 
-def test():
-    '''temporary test function'''
-    input_shp_fname = Path('/sciclone/schism10/Hgrid_projects/STOFS3D-v8/v20p2s2_RiverMapper/'
-                           'shapefiles/nhdareas_ms_la_clipped4.shp')
+def test(input_shp_fname):
+    '''
+    Make a splitter shapefile for splitting a large raster/vector shapefile into smaller tiles
+    '''
 
     dem_box = gpd.read_file(input_shp_fname).total_bounds
     _, splitter_gdf = gen_splitter(dem_box, dl=0.5, overlap_ratio=0.01)
@@ -491,4 +490,4 @@ def test():
 
 
 if __name__ == '__main__':
-    test()
+    test
