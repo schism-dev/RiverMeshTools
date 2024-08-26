@@ -583,7 +583,7 @@ def get_all_points_from_shp(fname, silent=True, get_z=False):
     for i in range(shapefile.shape[0]):
         try:
             shp_points = np.array(shapefile.iloc[i, :]['geometry'].coords.xy).shape[1]
-        except AttributeError:  # nEw
+        except NotImplementedError:  # nEw
             print(f"warning: shape {i+1} of {shapefile.shape[0]} is invalid")
             continue
         npts += shp_points
@@ -600,7 +600,7 @@ def get_all_points_from_shp(fname, silent=True, get_z=False):
     for i in range(shapefile.shape[0]):
         try:
             shp_points = np.array(shapefile.iloc[i, :]['geometry'].coords.xy).shape[1]
-        except AttributeError:  # nEw
+        except NotImplementedError:  # nEw
             print(f"warning: shape {i+1} of {shapefile.shape[0]} is invalid")
             continue
 
@@ -682,12 +682,18 @@ def test():
     # extract_quad_polygons(input_fname='/sciclone/schism10/feiye/STOFS3D-v7/Inputs/I18c/tvd_polygons.map')
 
     # sample 4
-    # make a shapefile from a map, with extra attributes
-    my_map = SMS_MAP(
-        filename='/sciclone/schism10/Hgrid_projects/STOFS3D-v7/'
-                 'v19_RiverMapper/Outputs/bora_v19.1.v19_ie_v18_3_nwm_clipped_in_cudem_missing_tiles_20-core/'
-                 'total_river_arcs_extra.map')
-    my_gdf = my_map.to_GeoDataFrame()
+    # wdir = ('/sciclone/schism10/feiye/STOFS3D-v7/v19_RiverMapper/Outputs/'
+    #         'bora_v19.1.v19_ie_v18_3_nwm_clipped_in_cudem_missing_tiles_20-core/')
+    wdir = ('/sciclone/schism10/Hgrid_projects/STOFS3D-v8/v20p2s2_RiverMapper/Outputs/'
+            'bora_v20p2s2v21.nhdflowline_ms_la_clipped4_4-core/')
+    my_map = SMS_MAP(f'{wdir}/total_river_arcs_extra.map')
+    write_river_shape_extra(my_map, f'{wdir}/total_river_arcs_extra.shp')
+
+
+def write_river_shape_extra(sms_map, output_fname):
+    '''make a shapefile from a map, with extra attributes'''
+
+    my_gdf = sms_map.to_GeoDataFrame()
     # add new columns of river indices and arc indices
     my_gdf['river_idx'] = -1
     my_gdf['local_arc_idx'] = -1
@@ -706,10 +712,8 @@ def test():
         if local_arc_idx == nrows:  # all arcs in a river has been processed
             river_idx += 1
             local_arc_idx = 0
-    my_gdf.to_file(
-        '/sciclone/schism10/Hgrid_projects/STOFS3D-v7/v19_RiverMapper/'
-        'Outputs/bora_v19.1.v19_ie_v18_3_nwm_clipped_in_cudem_missing_tiles_20-core/'
-        'total_river_arcs_extra.shp')
+
+    my_gdf.to_file(output_fname)
 
 
 if __name__ == '__main__':

@@ -29,7 +29,7 @@ import pandas as pd
 from scipy import interpolate
 from scipy.spatial import cKDTree
 from shapely.geometry import LineString, MultiPoint, Point
-from shapely.ops import polygonize, split, unary_union
+from shapely.ops import polygonize, unary_union
 from geopandas.tools import sjoin
 from sklearn.neighbors import NearestNeighbors
 
@@ -128,11 +128,28 @@ class Geoms_XY():
         new_xyz = self.xy[unique_rows, :]
         self.snap_to_points(new_xyz)
 
+
 # ------------------------------------------------------------------
 # low level functions mainly for basic geometric processing
 # ------------------------------------------------------------------
-
 def moving_average(a, n=10, self_weights=0):
+    '''
+    Calculate the moving average of a 1D numpy array
+
+    Inputs:
+    - a: 1D numpy array
+    - n: number of points to average
+    - self_weights: weight for the original data,
+        when self_weights=0, it is a simple moving average
+        when self_weights >> 0, there is little change to the original data
+        self_weights cannot be negative
+
+    Outputs:
+    - ret2: 1D numpy array of the moving average
+    '''
+    if self_weights < 0:
+        raise ValueError('self_weights cannot be negative')
+
     if a.shape[0] <= n:
         # linearly interpolate the first and last records
         a = a[:, np.newaxis]
@@ -157,11 +174,22 @@ def moving_average(a, n=10, self_weights=0):
 
         return ret2
 
-def getAngle(a, b, c):
-    ang = math.degrees(math.atan2(c[1]-b[1], c[0]-b[0]) - math.atan2(a[1]-b[1], a[0]-b[0]))
+
+def get_angle(a, b, c):
+    '''
+    Calculate the Angle abc, where a, b, c are 2D coordinates
+    The range of the angle is [0, 360) degrees
+    (not used currently)
+    '''
+    ang = math.degrees(
+        math.atan2(c[1]-b[1], c[0]-b[0]) - math.atan2(a[1]-b[1], a[0]-b[0]))
     return ang + 360 if ang < 0 else ang
 
+
 def get_angle_diffs(xs, ys):
+    '''
+    Calculate the angle differences between adjacent segments of a line
+    '''
     line = np.c_[xs, ys]
     line_cplx = np.squeeze(line.view(np.complex128))
     angles = np.angle(np.diff(line_cplx))
@@ -172,28 +200,47 @@ def get_angle_diffs(xs, ys):
 
     return angle_diff
 
-def geos2SmsArcList(geoms=None):
-    sms_arc_list = []
-    for i, line in enumerate(geoms):
-        sms_arc_list.append(SMS_ARC(points=line.coords._coords, src_prj='epsg:4326'))
-
-    return sms_arc_list
 
 def nearest_neighbour(points_a, points_b):
+    '''Find the nearest neighbour of points_a in points_b'''
     tree = cKDTree(points_b)
     return tree.query(points_a)[0], tree.query(points_a)[1]
 
-def split_line_by_point(line, point, tolerance: float=1.0e-12):
-    # return split(snap(line, point, tolerance), point)
-    return split(line, point)
 
-def snap_vertices(line, thalweg_resolution):
+def get_dist_increment(line):
+    '''Calculate the distance increment along a line'''
+    line_copy = deepcopy(line)
+    line_cplx = np.squeeze(line_copy.view(np.complex128))
+    dist = np.absolute(line_cplx[1:] - line_cplx[:-1])
+    return dist
+
+
+def intersect(A, B, C, D):
+    '''
+    Return true if line segments AB and CD intersect,
+    where A, B, C, D are 2D coordinates
+    '''
+    def ccw(A, B, C):
+        '''
+        Check if the points A, B, C are in a counterclockwise order;
+        A, B, C: 2D coordinates
+        '''
+        return (C[1]-A[1]) * (B[0]-A[0]) > (B[1]-A[1]) * (C[0]-A[0])
+
+    return ccw(A, C, D) != ccw(B, C, D) and ccw(A, B, C) != ccw(A, B, D)
+
+
+def snap_vertices(line, resolution):
+    '''
+    Sequentially remove the vertices of a line based on specified resolution,
+    The resulting line keeps a subset of the original vertices
+    '''
     increment_along_thalweg = get_dist_increment(line)
 
     idx = 0
     original_seg_length = increment_along_thalweg[0]
     while idx < len(increment_along_thalweg)-1:
-        if original_seg_length < thalweg_resolution[idx]:
+        if original_seg_length < resolution[idx]:
             line[idx+1, :] = line[idx, :]  # snap current point to the previous one
             original_seg_length += increment_along_thalweg[idx+1]
         else:
@@ -202,23 +249,9 @@ def snap_vertices(line, thalweg_resolution):
 
     return line
 
-def get_dist_increment(line):
-    line_copy = deepcopy(line)
-    line_cplx = np.squeeze(line_copy.view(np.complex128))
-    dist = np.absolute(line_cplx[1:] - line_cplx[:-1])
-
-    # return np.r_[0.0, np.cumsum(dist)]
-    return dist
-
-def ccw(A,B,C):
-    # A is a point with the coordinate x=A[0], y=A[1]
-    return (C[1]-A[1]) * (B[0]-A[0]) > (B[1]-A[1]) * (C[0]-A[0])
-
-# Return true if line segments AB and CD intersect
-def intersect(A,B,C,D):
-    return ccw(A,C,D) != ccw(B,C,D) and ccw(A,B,C) != ccw(A,B,D)
 
 def gdf2arclist(gdf):
+    '''Convert a geopandas dataframe of LineStrings to a list of LineString objects'''
     uu = gdf.unary_union
     if uu.is_empty:
         print('Warning: No arcs left after cleaning')
@@ -232,25 +265,48 @@ def gdf2arclist(gdf):
         raise TypeError('Unexpected geometry type after cleaning')
     return arcs
 
+
+def geos2SmsArcList(geoms=None):
+    '''
+    Convert a geopandas dataframe of LineStrings to a list of SMS_ARC objects
+    For the purpose of this code, source projection is always "epsg:4326"
+    '''
+    return [SMS_ARC(points=np.array(line.coords), src_prj='epsg:4326') for line in geoms]
+
+
 # ------------------------------------------------------------------
 # higher level functions for specific tasks involved in river map generation
 # ------------------------------------------------------------------
+def smooth_thalweg(line, ang_diff_shres=np.pi/2.4, nmax=100, smooth_coef=0.2, option=2):
+    '''Smooth the thalweg by removing sharp turns'''
 
-def smooth_thalweg(line, ang_diff_shres=np.pi/2.4, nmax=100, smooth_coef=0.2):
     xs = line[:, 0]
     ys = line[:, 1]
 
     n = 0
     while n < nmax:
-        angle_diffs = np.r_[0.0, get_angle_diffs(xs, ys), 0.0]
+        # pad with zeros at both ends, so end points will not be identified as sharp turns
+        angle_diffs = np.r_[0.0, get_angle_diffs(line[:, 0], line[:, 1]), 0.0]
         sharp_turns = np.argwhere(abs(angle_diffs) > ang_diff_shres)[:, 0]
         if not sharp_turns.size:
             break
         else:
-            # Step 1: plan to move the sharp turn point to a new point, based on
-            # the average coordinates of the two adjacent points and the original location
-            line[sharp_turns, 0] = np.array((xs[sharp_turns-1] + xs[sharp_turns+1]) / 2) * smooth_coef + xs[sharp_turns] * (1-smooth_coef)
-            line[sharp_turns, 1] = np.array((ys[sharp_turns-1] + ys[sharp_turns+1]) / 2) * smooth_coef + ys[sharp_turns] * (1-smooth_coef)
+            if option == 1:  # deprecated
+                # Option 1: move the sharp turn point to a new point, based on
+                # the average coordinates of the two adjacent points and the original location.
+                # This is not a good option because it may deviate from the real thalweg
+                line[sharp_turns, 0] = (
+                    np.array((xs[sharp_turns-1] + xs[sharp_turns+1]) / 2) * smooth_coef
+                    + xs[sharp_turns] * (1-smooth_coef)
+                )
+                line[sharp_turns, 1] = (
+                    np.array((ys[sharp_turns-1] + ys[sharp_turns+1]) / 2) * smooth_coef
+                    + ys[sharp_turns] * (1-smooth_coef)
+                )
+            elif option == 2:
+                # Option 2: remove the sharp turn point, at least the end points are preserved,
+                # because the angles are padded with zeros at both ends
+                line = np.delete(line, sharp_turns, axis=0)
 
             n += 1
 
@@ -262,6 +318,7 @@ def smooth_thalweg(line, ang_diff_shres=np.pi/2.4, nmax=100, smooth_coef=0.2):
     perp = get_perpendicular_angle(line)
 
     return line, perp
+
 
 def river_quality(xs, ys, idx=None):
     # identify channels that are too ambiguous
@@ -1334,7 +1391,8 @@ def make_river_map(
 
         # decorate the function to accept same parameters as default_width2narcs
         def decorated_custom_width2narcs(width, min_arcs=min_arcs, opt=width2narcs_option):  # opt is dummy
-            return max(min_arcs, custom_width2narcs(width))  # make sure there are at least min_arcs arcs despite user's evaluation
+            # enforce min_arcs and integer return value despite user's evaluation
+            return max(min_arcs, int(custom_width2narcs(width)))
             
         width2narcs = decorated_custom_width2narcs
     else:
@@ -1769,7 +1827,8 @@ def make_river_map(
     # convert to linestrings
     total_arcs_cleaned = [LineString(arc.points[:, :]) for arc in arc_groups if arc is not None]
 
-    if len(total_arcs_cleaned) > 0:
+    if len(total_arcs_cleaned) > 0:  # tEmP
+        pass
         total_arcs_cleaned = clean_arcs(
             arcs=total_arcs_cleaned, n_clean_iter=n_clean_iter,
             snap_point_reso_ratio=snap_point_reso_ratio, snap_arc_reso_ratio=snap_arc_reso_ratio
