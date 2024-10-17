@@ -48,7 +48,9 @@ class ConfigRiverMap():
     DEFAULT_i_DiagnosticOutput = False
     DEFAULT_i_pseudo_channel = 2
     DEFAULT_pseudo_channel_width = 18
+    DEFAULT_pseudo_channel_dl = 20
     DEFAULT_nrow_pseudo_channel = 4
+    DEFAULT_dry_run_only = False
 
     def __init__(
         self,
@@ -75,6 +77,7 @@ class ConfigRiverMap():
         i_pseudo_channel=DEFAULT_i_pseudo_channel,
         pseudo_channel_width=DEFAULT_pseudo_channel_width,
         nrow_pseudo_channel=DEFAULT_nrow_pseudo_channel,
+        dry_run_only=DEFAULT_dry_run_only,
     ):
         # see a description of the parameters at the beginning of the function make_river_map() in make_river_map.py
         self.optional = {
@@ -101,6 +104,7 @@ class ConfigRiverMap():
             'i_pseudo_channel': i_pseudo_channel,
             'pseudo_channel_width': pseudo_channel_width,
             'nrow_pseudo_channel': nrow_pseudo_channel,
+            'dry_run_only': dry_run_only,
         }
 
     @classmethod

@@ -21,6 +21,7 @@ import math
 import os
 import sys
 import time
+from tqdm import tqdm
 
 # Related third-party imports
 import geopandas as gpd
@@ -589,7 +590,7 @@ def redistribute_arc(
     Optionally, increase the resolution near the endpoints for better intersections
     '''
 
-    cross_channel_length_scale = channel_width/(this_nrow_arcs-1)
+    cross_channel_length_scale = channel_width / (this_nrow_arcs-1)
 
     retained_points = np.ones((line.shape[0]), dtype=bool)
 
@@ -630,7 +631,7 @@ def redistribute_arc(
             for j in range(i):
                 curv[j::i] = np.maximum(curv[j::i], curvature(line_smooth[j::i]))
 
-    R = 1.0/(curv+1e-10)
+    R = 1.0 / (curv + 1e-10)
     # resolution at points
     river_resolution = np.minimum(R_coef * R, length_width_ratio * cross_channel_length_scale)
     river_resolution = np.minimum(np.maximum(reso_thres[0], river_resolution), reso_thres[1])
@@ -1215,7 +1216,7 @@ def clean_river_arcs_for_ocsmesh(river_arcs=None, total_arcs=None):
 
 def output_ocsmesh(
     output_dir, arc_shp_fname='total_arcs.shp',
-    outline_shp_fname='total_river_outline.shp', area_thres=0.85
+    outline_shp_fname='total_river_outline.shp', area_thres=0.7
 ):
     '''
     Output the river polygons for OCSMesh.
@@ -1230,6 +1231,7 @@ def output_ocsmesh(
     Output:
         total_river_polys.shp: the name of the shapefile containing the river polygons
     '''
+    logger.info('Preparing OCSMesh products ...')
     time_ocsmesh_start = time.time()
 
     # convert linestrings to polygons, which creates extra polygons if a land area is enclosed by river arcs
@@ -1243,94 +1245,45 @@ def output_ocsmesh(
 
     total_river_outline_cpp = gpd.read_file(f'{output_dir}/{outline_shp_fname}').to_crs(CPP_CRS)
 
-    # use buffers to roughly filter out land polygons that are largely outside the river outline
-    total_river_outline_cpp_buffer = total_river_outline_cpp.copy()
-    idx_river = [
-        np.zeros((len(total_polys_cpp['geometry']), ), dtype=bool),
-        np.zeros((len(total_polys_cpp['geometry']), ), dtype=bool)
-    ]  # initialize two sets of indices
+    # Perform the spatial join first using 'intersects' to find potential matches
+    def buffer_polygon(polygon):
+        area_sqrt = np.sqrt(polygon.area)  # Calculate the square root of the polygon's area
+        buffer_distance = area_sqrt * 0.1  # Buffer distance is 10% of this value
+        return polygon.buffer(buffer_distance)  # Return the buffered polygon
 
-    # two buffers are used, the first one is smaller and screens more strictly
-    for i, buf in enumerate([100, 1000]):
-        total_river_outline_cpp_buffer['geometry'] = total_river_outline_cpp_buffer.buffer(buf)
-        river_polys_idx = sjoin(
-            total_polys_cpp, total_river_outline_cpp_buffer, how="inner", predicate="within"
-        ).index.tolist()
-        river_polys_idx = list(set(river_polys_idx))  # remove duplicates
-        idx_river[i][river_polys_idx] = True
+    total_river_outline_buf = total_river_outline_cpp.copy()
+    total_river_outline_buf['buffered_geometry'] = total_river_outline_buf.geometry.apply(buffer_polygon)
+    possible_matches = sjoin(
+        total_polys_cpp, total_river_outline_buf, how="inner", predicate="intersects"
+    )
+    # Initialize an empty list to store indices of strictly within polygons
+    poly_idx = []
+    # Iterate through each polygon in the original total_river_outline_cpp
+    logger.info('Filtering out land areas that are largely outside the river outline ...')
+    for idx, river_poly in tqdm(
+        total_river_outline_cpp.iterrows(), total=total_river_outline_cpp.shape[0]
+    ):
+        # Select polygons from total_polys_cpp that intersect with the current river_poly
+        intersecting_polys = possible_matches[possible_matches.index_right == idx]
 
-    logger.info(
-        'Identify river polygons for OCSMesh : preliminary screening took %s seconds.',
-        time.time() - time_ocsmesh_start
+        # Check if each of these intersecting polygons is largely within the current river_poly
+        for _, poly in intersecting_polys.iterrows():
+            # Calculate the intersection area
+            intersection_area = poly['geometry'].intersection(river_poly['geometry']).area
+            # Calculate the original area of the polygon
+            original_area = poly['geometry'].area
+
+            # Check if a big portion the original area is within the river polygon
+            if intersection_area / original_area > area_thres:
+                poly_idx.append(poly.name)
+    gpd.GeoDataFrame(
+        crs=CPP_CRS, geometry=total_polys_cpp.loc[poly_idx, 'geometry']
+    ).to_crs('epsg:4326').to_file(
+        filename=f'{output_dir}/total_river_polys.shp', driver="ESRI Shapefile"
     )
 
-    # Where two buffer checks don't agree, a more precise but slower screening is used.
-    # This is okay because questionable polygons only account for a small fraction of all polygons.
-    this_time = time.time()
-    questionable_idx = idx_river[0] ^ idx_river[1]  # XOR
-
-    if sum(questionable_idx) > 0:  # at least one questionable candidate
-        questionable_polys = gpd.GeoDataFrame(crs=CPP_CRS, geometry=total_polys_cpp.loc[questionable_idx, 'geometry'])
-
-        # find intersection area between each questionable polygon and all river outline polygons
-        questionable_intersection = sjoin(
-            questionable_polys, total_river_outline_cpp, how="inner", predicate="intersects")
-        intersection_area = questionable_intersection.apply(
-            lambda row: row['geometry'].intersection(
-                total_river_outline_cpp.to_crs(CPP_CRS).loc[row['index_right'], 'geometry']
-            ).area, axis=1)
-
-        # combine same index rows, which result from overlaps between a same polygon and multiple river outline polygons
-        intersection_area = intersection_area.groupby(intersection_area.index).sum().sort_index()
-
-        # compare the intersection area with the area of the questionable polygon itself
-        questionable_poly_area = questionable_polys['geometry'].area
-        questionable_poly_area = questionable_poly_area.groupby(questionable_poly_area.index).sum().sort_index()
-        if not np.array_equal(questionable_poly_area.index, intersection_area.index):
-            logger.warning(
-                'Warning: index mismatch for questionable_poly_area and intersection_area,'
-                ' keeping the common indices only'
-            )
-            common_idx = np.intersect1d(questionable_poly_area.index, intersection_area.index)
-            questionable_poly_area = questionable_poly_area.loc[common_idx]
-            intersection_area = intersection_area.loc[common_idx]
-
-        # include river polygons that are largely inside the river outline
-        questionable_valid = intersection_area > area_thres * questionable_poly_area
-        questionable_valid_ids = questionable_poly_area.index[questionable_valid]
-        # add additional valid ids identified with the more precise method to those identified by the stricter criterion
-        idx_river[0][questionable_valid_ids] = True
-
-    logger.info('Identify river polygons for OCSMesh : second screening took %s seconds.', time.time()-this_time)
-
-    # Third screening, mainly for islands enclosed by river arcs
-    # Shrink the polygons by 10 meters and see if the shunken polygons are inside the river outline
-    total_copy = total_polys_cpp.copy()
-    total_polys_cpp = total_copy.copy()
-
-    this_time = time.time()
-    total_polys_cpp = total_polys_cpp.loc[idx_river[0], :].copy().reset_index(drop=True)
-    total_polys_shunken = gpd.GeoDataFrame(crs=CPP_CRS, geometry=total_polys_cpp['geometry'].buffer(-20))
-    valid_idx = np.ones((len(total_polys_shunken), ), dtype=bool)
-    empty_idx = total_polys_shunken[total_polys_shunken.is_empty].index
-    idx = sjoin(total_polys_shunken, total_river_outline_cpp, how="inner", predicate="within").index.tolist()
-    valid_idx[idx] = True
-    valid_idx[empty_idx] = True
-    total_polys_cpp = total_polys_cpp.loc[valid_idx, :]
-
-    logger.info('Identify river polygons for OCSMesh : thrid screening took %s seconds.', time.time()-this_time)
-
-    # assemble the final river polygons
-    river_polys = gpd.GeoDataFrame(crs=CPP_CRS, geometry=total_polys_cpp['geometry'])
-
-    # clean up the river polygons
-    drop_columns = [col for col in river_polys.columns if col not in ['geometry', 'FID']]
-    river_polys = river_polys.drop(drop_columns, axis=1)
-    river_polys = river_polys.drop_duplicates(subset=['geometry']).reset_index(drop=True).to_crs('epsg:4326')
-
-    # write the actual river polygons to file
-    river_polys.to_file(filename=f'{output_dir}/total_river_polys.shp', driver="ESRI Shapefile")
     # write extra information to file
+    logger.info('Writing extra river arc information to file ...')
     write_river_shape_extra(
         SMS_MAP(f'{output_dir}/total_river_arcs_extra.map'), f'{output_dir}/total_river_arcs_extra.shp')
 
@@ -1344,22 +1297,25 @@ def generate_river_outline_polys(river_arcs=None):
     """
     river_outline_polygons = []
     river_polygons = [None] * river_arcs.shape[0]
-    for i, river in enumerate(river_arcs):
-        # save river polygon (enclosed by two out-most arcs and two cross-river transects at both ends)
-        if sum(river[:] is not None) >= 2:  # at least two rows of arcs to make a polygon
-            river_polygons[i] = []
-            idx = np.argwhere(river_arcs[i, :] is not None).squeeze()
-            valid_river_arcs = river_arcs[i, idx]
-            for _ in range(1):  # range(len(valid_river_arcs)-1):
-                mls_uu = unary_union(LineString(np.r_[
-                    valid_river_arcs[0].points[:, :2],
-                    np.flipud(valid_river_arcs[-1].points[:, :2]),
-                    valid_river_arcs[0].points[0, :2].reshape(-1, 2)
-                ]))
-                for polygon in polygonize(mls_uu):
-                    river_polygons[i].append(polygon)
 
-    # convert to 1D list for later conversion to shapefile
+    # save river polygon (enclosed by two out-most arcs and two cross-river transects at both ends)
+    for i, river in enumerate(river_arcs):
+        # number of valid arcs in this river segment
+        idx = np.argwhere(np.not_equal(river, None)).squeeze()
+        if len(idx) >= 2:  # at least two rows of arcs to make a polygon
+            river_polygons[i] = []
+            valid_river_arcs = river[idx]
+
+            # close the river polygon
+            mls_uu = unary_union(LineString(np.r_[
+                valid_river_arcs[0].points[:, :2],  # the first arc
+                np.flipud(valid_river_arcs[-1].points[:, :2]),  # the last arc in reverse order
+                valid_river_arcs[0].points[0, :2].reshape(-1, 2)  # connect 1st pt, close the polygon
+            ]))
+            for polygon in polygonize(mls_uu):
+                river_polygons[i].append(polygon)
+
+    # convert to 1D list for conversion to shapefile later
     for river_polygon in river_polygons:
         if river_polygon is not None:
             river_outline_polygons += river_polygon
@@ -1499,7 +1455,9 @@ def make_river_map(
         i_DiagnosticOutput=ConfigRiverMap.DEFAULT_i_DiagnosticOutput,
         i_pseudo_channel=ConfigRiverMap.DEFAULT_i_pseudo_channel,
         pseudo_channel_width=ConfigRiverMap.DEFAULT_pseudo_channel_width,
+        pseudo_channel_dl=ConfigRiverMap.DEFAULT_pseudo_channel_dl,
         nrow_pseudo_channel=ConfigRiverMap.DEFAULT_nrow_pseudo_channel,
+        dry_run_only=ConfigRiverMap.DEFAULT_dry_run_only
 ):
     '''
     [Core routine for making river maps]
@@ -1555,13 +1513,14 @@ def make_river_map(
     | i_OCSMesh | bool | Whether or not to generate polygon-based outputs to be used as inputs to OCSMesh |
     | i_DiagnosticsOutput | bool | whether to output diagnostic information |
 
-    | i_pseudo_channel | int | 0:  default, no pseudo channel,
-    nrow_pseudo_channel and pseudo_channel_width are ignored;
+    | i_pseudo_channel | int |
+    0:  no pseudo channel, nrow_pseudo_channel and pseudo_channel_width are ignored;
     1: fixed-width channel with nrow elements in the cross-channel direction,
     it can also be used to generate a fixed-width levee for a given levee centerline;
-    2: implement a pseudo channel when the river is poorly defined in DEM
+    2: (default) implement a pseudo channel when the river is poorly defined in DEM
 
     | pseudo_channel_width | float | width of the pseudo channel (in meters) |
+    | pseudo_channel_dl | float | along channel resolution of the pseudo channel (in meters) |
     | nrow_pseudo_channel |int| number of rows of elements in the cross-channel direction in the pseudo channel |
 
     <Outputs>:
@@ -1578,6 +1537,7 @@ def make_river_map(
 
     # ----------------------   pre-process some inputs -------------------------
     river_threshold = np.array(river_threshold) / MapUnit2METER
+    pseudo_channel_length_width_ratio = pseudo_channel_dl / (pseudo_channel_width / (nrow_pseudo_channel - 1))
 
     if i_pseudo_channel == 1:
         require_dem = False
@@ -1670,30 +1630,55 @@ def make_river_map(
 
     # ------------------------- read thalweg ---------------------------
     xyz, l2g, curv, _ = get_all_points_from_shp(thalweg_shp_fname)
+    xyz_lonlat = np.copy(xyz)
     xyz[:, 0], xyz[:, 1] = lonlat2cpp(xyz[:, 0], xyz[:, 1])
 
     # Read additional field (dummy) if available. All dummy thalwegs will be preserved as is.
-    try:
-        dummy = gpd.read_file(thalweg_shp_fname)['dummy'].values
-    except KeyError:
+    thalweg_gdf = gpd.read_file(thalweg_shp_fname)
+    # dummy arcs will be preserved as is
+    if "dummy" in thalweg_gdf.columns:
+        dummy = thalweg_gdf['dummy'].values
         logger.info(
-            '%s warning: no dummy field found in %s, all thalwegs will be processed',
+            '%s "dummy" field found in %s, dummy thalwegs will be preserved as is',
             mpi_print_prefix, thalweg_shp_fname
         )
+    else:
         dummy = np.zeros((len(l2g), ), dtype=int)
 
+    if "keep" in thalweg_gdf.columns:
+        keep = thalweg_gdf['keep'].values
+        keep = np.where(np.isnan(keep), 0, keep).astype(int)  # replace NaN with 0 and convert to int
+        keep = np.where(np.equal(keep, None), 0, keep).astype(int)  # replace None with 0 and convert to int
+        logger.info(
+            '%s "keep" field found in %s, "keep" thalwegs will be processed regardless of other criteria',
+            mpi_print_prefix, thalweg_shp_fname
+        )
+    else:
+        keep = np.zeros((len(l2g), ), dtype=int)
+
+    if "id" in thalweg_gdf.columns:
+        tid = thalweg_gdf['id'].values
+    else:
+        tid = np.arange(len(l2g))
+
     thalwegs = []
+    thalwegs_lonlat = []
     thalwegs_smooth = []
     thalwegs_curv = []
     thalweg_endpoints = np.empty((0, 2), dtype=float)
     if selected_thalweg is None:
         selected_thalweg = np.arange(len(l2g))
 
-    idummy_thalweg = []
+    idummy_thalweg = []  # size will be the number of selected thalwegs
+    ikeep_thalweg = []  # size will be the number of selected thalwegs
+    thalweg_id = []
     for i, idx in enumerate(l2g):
         if i in selected_thalweg:
             idummy_thalweg.append(dummy[i])
+            ikeep_thalweg.append(keep[i])
+            thalweg_id.append(tid[i])
             thalwegs.append(xyz[idx, :])
+            thalwegs_lonlat.append(xyz_lonlat[idx, :])
             thalwegs_curv.append(curv[idx])
             thalweg_endpoints = np.r_[thalweg_endpoints, np.reshape(xyz[idx][0, :], (1, 2))]
             thalweg_endpoints = np.r_[thalweg_endpoints, np.reshape(xyz[idx][-1, :], (1, 2))]
@@ -1712,7 +1697,7 @@ def make_river_map(
 
     for i, [thalweg, curv] in enumerate(zip(thalwegs, thalwegs_curv)):
         if idummy_thalweg[i] == 1:
-            continue  # still a valid thalweg, to be processed as pseudo channel later
+            continue  # still a valid thalweg, to be preserved as is (i.e., no bank search needed)
 
         bank_search_status = 0  # intialized to 0 (success); -1: narrower than min width; -2: not found
         if require_dem:
@@ -1739,12 +1724,27 @@ def make_river_map(
             x_banks_left, y_banks_left, x_banks_right, y_banks_right, _, width = get_fake_banks(
                 thalweg, const_bank_width=pseudo_channel_width)
 
+        # preliminary check
         if bank_search_status == -2:  # failed to find banks
             thalweg_endpoints_width[i*2] = 0.0
             thalweg_endpoints_width[i*2+1] = 0.0
             valid_thalwegs[i] = False
             logger.warning("%s warning: thalweg %d out of DEM coverage, discarding ...", mpi_print_prefix, i+1)
-            continue  # go to next thalweg
+        elif bank_search_status == -1:  # narrower than min width
+            thalweg_widths[i] = pseudo_channel_width
+            thalweg_endpoints_width[i*2] = pseudo_channel_width
+            thalweg_endpoints_width[i*2+1] = pseudo_channel_width
+            if bool(ikeep_thalweg[i]):
+                logger.warning(
+                    "%s warning: thalweg %d (id: %s)'s bank width is smaller than the minimum width, "
+                    "it will likely fall back a pseudo channel", mpi_print_prefix, i+1, thalweg_id[i]
+                )
+            else:
+                logger.warning(
+                    "%s warning: thalweg %d (id: %s)'s bank width is smaller than the minimum width, discarding ...",
+                    mpi_print_prefix, i+1, thalweg_id[i]
+                )
+                valid_thalwegs[i] = False
         else:  # found banks
             thalweg_widths[i] = width
             thalweg_endpoints_width[i*2] = width[0]
@@ -1753,10 +1753,19 @@ def make_river_map(
             if len(thalweg[:, 0]) < 2:
                 logger.warning("%s warning: thalweg %d only has one point, discarding ...", mpi_print_prefix, i+1)
                 valid_thalwegs[i] = False
-                continue
 
-        original_banks[i, 0] = SMS_ARC(points=np.c_[x_banks_left, y_banks_left], src_prj='cpp')
-        original_banks[i, 1] = SMS_ARC(points=np.c_[x_banks_right, y_banks_right], src_prj='cpp')
+            original_banks[i, 0] = SMS_ARC(points=np.c_[x_banks_left, y_banks_left], src_prj='cpp')
+            original_banks[i, 1] = SMS_ARC(points=np.c_[x_banks_right, y_banks_right], src_prj='cpp')
+
+    # output valid thalwegs
+    valid_thalwegs_list = [thalwegs_lonlat[i] for i in range(len(thalwegs)) if valid_thalwegs[i]]
+    gpd.GeoDataFrame(
+        geometry=[LineString(thalweg) for thalweg in valid_thalwegs_list], crs="EPSG:4326"
+    ).to_file(
+        filename=f'{output_dir}/{output_prefix}valid_thalwegs.shp', driver="ESRI Shapefile")
+
+    if dry_run_only:
+        return
 
     # End Dry run: found valid river segments; record approximate channel width
 
@@ -1797,6 +1806,9 @@ def make_river_map(
     ):
         # logger.info(f'{mpi_print_prefix} Wet run: Arc {i+1} of {len(thalwegs)}')
 
+        # if thalweg_id[i] != '10694':
+        #     continue
+
         if idummy_thalweg[i]:
             logger.info("%s Thalweg %d is dummy, skipping and keep original arcs ...", mpi_print_prefix, i)
             # use along-thalweg resolution as a substitute of cross-channel resolution
@@ -1820,7 +1832,7 @@ def make_river_map(
                 width[width == sorted_widths[0]] = np.mean(width[width > sorted_widths[0]])
 
         # set number of cross-channel elements
-        if i_pseudo_channel == 1:
+        if i_pseudo_channel == 1:  # for special features like levees and barrier islands
             this_nrow_arcs = nrow_pseudo_channel
         else:
             this_nrow_arcs = min(
@@ -1845,12 +1857,12 @@ def make_river_map(
         # Find bank arcs and inner arcs
         # Under 4 cases (Case #), the quality_controlled flag is set to True
         quality_controlled = False
-        if i_pseudo_channel == 1:  # marked as pseudo channel in the input shapefile
+        if i_pseudo_channel == 1:  # for special features like levees and barrier islands
             quality_controlled = True  # (Case 1) always true for pseudo channel
             x_banks_left, y_banks_left, x_banks_right, y_banks_right, _, width = get_fake_banks(
                 thalweg, const_bank_width=pseudo_channel_width)
             inner_arc_position = set_inner_arc_position(nrow_arcs=nrow_pseudo_channel, position_type='fake')
-        else:  # real channels, try to find banks first
+        else:  # real channels, try to find banks first, even if dry run suggests pseudo channel
             # update thalweg info
             elevs = get_elev_from_tiles(thalweg[:, 0], thalweg[:, 1], S_list, scale=elev_scale)
             if elevs is None:
@@ -1948,27 +1960,27 @@ def make_river_map(
             # final touch-ups
             if bank_search_status < 0:  # degenerate case, no further touch-ups needed
                 logger.warning(
-                    '%s warning: cannot find banks for thalweg %s after redistribution',
-                    mpi_print_prefix, i+1)
+                    '\n%s warning: degenerate case during final touch-ups,'
+                    '(cannot find banks or narrower than min_width)'
+                    'for thalweg %s after redistribution', mpi_print_prefix, i+1)
                 if i_pseudo_channel == 0:
-                    logger.warning('%s warning: neglecting the thalweg ...', mpi_print_prefix)
+                    logger.warning('%s warning: neglecting the thalweg ...\n', mpi_print_prefix)
                     continue
+                # i_pseudo_channel == 1 already handled above
                 elif i_pseudo_channel == 2:
                     # (Case 2): Real river but no banks found, implement a pseudo channel as a fallback
-                    quality_controlled = True
-                    logger.warning(
-                        '%s warning: smaller than min_width for thalweg %s,'
-                        'implementing a pseudo channel of width %s ...',
-                        mpi_print_prefix, i+1, pseudo_channel_width)
+                    quality_controlled = True  # quality check waived for pseudo channel
+                    logger.warning('implementing a pseudo channel of width %s ...\n', pseudo_channel_width)
 
                     # nEw, add an option to coarsen the along-channel resolution
                     # redistibute thalweg vertices again as a pseudo channel, which
                     # typically has a fixed width and a coarser along-channel resolution
                     thalweg, thalweg_smooth, _, retained_idx = redistribute_arc(
-                        thalweg, thalweg_smooth[retained_idx], width, this_nrow_arcs,
-                        R_coef=R_coef, length_width_ratio=length_width_ratio*3,  # coarsen the along-channel resolution
-                        reso_thres=along_channel_reso_thres, smooth_option=1,
-                        endpoints_scale=endpoints_scale
+                        thalweg, thalweg_smooth[retained_idx],
+                        pseudo_channel_width, nrow_pseudo_channel, R_coef=R_coef,
+                        length_width_ratio=pseudo_channel_length_width_ratio,
+                        reso_thres=(0.3*pseudo_channel_dl, 1.1*pseudo_channel_dl),
+                        smooth_option=1, endpoints_scale=endpoints_scale
                     )
                     smoothed_thalwegs[i] = SMS_ARC(
                         points=np.c_[thalweg_smooth[:, 0], thalweg_smooth[:, 1]], src_prj='cpp')
@@ -2237,4 +2249,4 @@ def make_river_map(
 
 
 if __name__ == "__main__":
-    pass
+    print('done')

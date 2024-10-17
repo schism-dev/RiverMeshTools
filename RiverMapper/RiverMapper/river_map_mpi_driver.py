@@ -61,6 +61,21 @@ def rename_single_core_outputs(output_dir):
         Path(file).rename(new_name)
 
 
+def merge_dry_run_outputs(output_dir):
+    '''
+    Merge outputs from all cores for dry run
+    '''
+    logger.info('\n------------------ Merging outputs from all cores for dry run --------------\n')
+    time_merge_start = time.time()
+    
+    # shapefiles
+    valid_thalwegs = glob(f'{output_dir}/*valid_thalwegs.shp')
+    if len(valid_thalwegs) > 0:
+        gpd.pd.concat([gpd.read_file(x).to_crs('epsg:4326') for x in valid_thalwegs]).to_file(
+            f'{output_dir}/total_valid_thalwegs.shp')
+    logger.info('Merging outputs took: %s seconds.', time.time()-time_merge_start)
+
+
 def merge_outputs(output_dir):
     '''
     Merge outputs from all cores
@@ -137,10 +152,6 @@ def river_map_mpi_driver(
 
     thalweg_buffer = max(min_thalweg_buffer, river_map_config.optional['river_threshold'][-1])
 
-    # Whether or not to read thalweg info from cache.
-    # The cache file saves coordinates, index, curvature, and direction at all thalweg points
-    i_thalweg_cache = False  # deprecated (fast enough without caching)
-
     # i_grouping_cache: Whether or not to read grouping info from cache,
     # which is useful when the same DEMs and thalweg_shp_fname are used.
     # A cache file named "dems_json_file + thalweg_shp_fname_grouping.cache" will be saved
@@ -195,7 +206,6 @@ def river_map_mpi_driver(
                     thalweg_shp_fname=thalweg_shp_fname,
                     thalweg_buffer=thalweg_buffer,
                     silent=bool(rank),  # only rank 0 prints to screen
-                    i_thalweg_cache=i_thalweg_cache
                 )
                 if i_grouping_cache:
                     with open(cache_name, 'wb') as file:
@@ -277,14 +287,14 @@ def river_map_mpi_driver(
         zip(my_group_ids, my_tile_groups, my_tile_groups_thalwegs)
     ):
         # if my_group_id != 45:
-        #     continue  # for testing
+        #     continue  # temporary testing
 
         time_this_group_start = time.time()
         logger.info('Rank %s: Group %s (global: %s) started ...', rank, i, my_group_id)
         # update some parameters in the config file
         river_map_config.optional['output_prefix'] = f'Group_{my_group_id}_{rank}_{i}_'
         river_map_config.optional['mpi_print_prefix'] = (
-            f'[Rank {rank}, Group {i+1} of {len(my_tile_groups)}, global: {my_group_id}] ')
+            f'[Rank {rank}, Group {i+1} of {len(my_tile_groups)}, local id: {i}, global: {my_group_id}] ')
         river_map_config.optional['selected_thalweg'] = my_tile_group_thalwegs
         make_river_map(
             tif_fnames=my_tile_group,
@@ -303,31 +313,33 @@ def river_map_mpi_driver(
 
     # finalize
     if rank == 0:
-        # merge outputs from all ranks
-        total_arcs_map, _, _, _, _ = merge_outputs(output_dir)
+        if river_map_config.optional['dry_run_only']:
+            merge_dry_run_outputs(output_dir)
+        else:  # merge outputs from all ranks
+            total_arcs_map, _, _, _, _ = merge_outputs(output_dir)
 
-        logger.info('\n--------------- Final clean-ups --------------------------------------------------------\n')
-        time_final_cleanup_start = time.time()
+            logger.info('\n--------------- Final clean-ups --------------------------------------------------------\n')
+            time_final_cleanup_start = time.time()
 
-        total_arcs_cleaned = clean_arcs(
-            [arc for arc in total_arcs_map.to_GeoDataFrame().geometry.unary_union.geoms],
-            n_clean_iter=river_map_config.optional['n_clean_iter'],
-            snap_point_reso_ratio=river_map_config.optional['snap_point_reso_ratio'],
-            snap_arc_reso_ratio=river_map_config.optional['snap_arc_reso_ratio']
-        )
+            total_arcs_cleaned = clean_arcs(
+                [arc for arc in total_arcs_map.to_GeoDataFrame().geometry.unary_union.geoms],
+                n_clean_iter=river_map_config.optional['n_clean_iter'],
+                snap_point_reso_ratio=river_map_config.optional['snap_point_reso_ratio'],
+                snap_arc_reso_ratio=river_map_config.optional['snap_arc_reso_ratio']
+            )
 
-        SMS_MAP(arcs=geos2SmsArcList(total_arcs_cleaned)).writer(filename=f'{output_dir}/total_arcs.map')
+            SMS_MAP(arcs=geos2SmsArcList(total_arcs_cleaned)).writer(filename=f'{output_dir}/total_arcs.map')
 
-        gpd.GeoDataFrame(
-            index=range(len(total_arcs_cleaned)), crs='epsg:4326', geometry=total_arcs_cleaned
-        ).to_file(filename=f'{output_dir}/total_arcs.shp', driver="ESRI Shapefile")
+            gpd.GeoDataFrame(
+                index=range(len(total_arcs_cleaned)), crs='epsg:4326', geometry=total_arcs_cleaned
+            ).to_file(filename=f'{output_dir}/total_arcs.shp', driver="ESRI Shapefile")
 
-        logger.info('Final clean-ups took: %s seconds.', time.time()-time_final_cleanup_start)
+            logger.info('Final clean-ups took: %s seconds.', time.time()-time_final_cleanup_start)
+
+            # outputs for OCSMesh
+            if river_map_config.optional['i_OCSMesh']:
+                output_ocsmesh(output_dir, area_thres=0.85)
 
         # delete per-core outputs
         silentremove(glob(f'{output_dir}/Group*'))
         logger.info('>>>>>>>> Total run time: %s seconds >>>>>>>>', time.time()-time_start)
-
-        # outputs for OCSMesh
-        if river_map_config.optional['i_OCSMesh']:
-            output_ocsmesh(output_dir, area_thres=0.85)

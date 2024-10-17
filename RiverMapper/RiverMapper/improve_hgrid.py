@@ -9,7 +9,7 @@ the grid file can be in 2dm, gr3, or ll format
 Also see other sample usages in the main function.
 """
 
-from pylib import schism_grid
+from pylib import schism_grid, sms2grd
 from pylib import proj_pts, read_schism_bpfile, schism_bpfile
 
 from pylib_experimental.schism_file import cread_schism_hgrid
@@ -679,6 +679,31 @@ def test():
     # improve grid quality
     improve_hgrid(gd_meter, n_intersection_fix=0, area_threshold=area_threshold, skewness_threshold=skewness_threshold, nmax=4)
 
+def test2():
+    grid_dir = '/sciclone/schism10/Hgrid_projects/STOFS3D-v8/v43s2_RiverMapper/v44/Improve/'
+    grid_file = f'{grid_dir}/v44.2dm'
+
+    gd = sms2grd(grid_file)  # esri:102008
+    gd.save(f'{grid_dir}/hgrid.gr3')
+    gd = schism_grid(f'{grid_dir}/hgrid.gr3')
+
+    # this test may find any potential boundary issues
+    gd.compute_area()
+    gd.compute_bnd(method=1)
+    
+    # manually set parameters
+    skewness_threshold = 75
+    area_threshold = 1
+    
+    gd_ll = copy.deepcopy(gd)
+    gd_ll.proj(prj0='esri:102008', prj1='epsg:4326')  # reproject to lon/lat if necessary
+
+    grid_quality = quality_check_hgrid(gd, outdir=grid_dir, area_threshold=area_threshold, skewness_threshold=skewness_threshold)
+    write_diagnostics(outdir=grid_dir, grid_quality=grid_quality, hgrid_ref=gd_ll)
+
+    # improve grid quality
+    improve_hgrid(gd, n_intersection_fix=0, area_threshold=area_threshold, skewness_threshold=skewness_threshold, nmax=4)
+
 def main():
     # Sample usage , the horizontal coordinate unit of hgrid must be in meters
     grid_file, skewness_threshold, area_threshold = cmd_line_interface()
@@ -692,6 +717,5 @@ def main():
 
 
 if __name__ == "__main__":
-    test()
-    # main()
+    test2()
     pass

@@ -178,7 +178,7 @@ def Tif2XYZ(tif_fname=None, cache=True):
             with open(cache_name, 'rb') as f:
                 dem_data = pickle.load(f)
                 return [dem_data, is_new_cache]  # cache successfully read
-        except (ModuleNotFoundError, AttributeError) as e:
+        except (ModuleNotFoundError, AttributeError, pickle.UnpicklingError) as e:
             print(f'Warning: failed to read cache: {e}')
             print('removing existing cache and regenerating it ...')
             silentremove(cache_name)
@@ -337,9 +337,7 @@ def tile2dem_file(dem_dict, dem_order, tile_code):
 def find_thalweg_tile(
     dems_json_file='dems.json',
     thalweg_shp_fname='/sciclone/schism10/feiye/STOFS3D-v5/Inputs/v14/GA_riverstreams_cleaned_utm17N.shp',
-    thalweg_buffer=1000,
-    cache_folder=None,
-    silent=True, i_thalweg_cache=False
+    thalweg_buffer=1000, cache_folder=None, silent=True
 ):
     '''
     Assign thalwegs to DEM tiles
@@ -474,15 +472,17 @@ def find_thalweg_tile(
 
 def test(input_shp_fname):
     '''
-    Make a splitter shapefile for splitting a large raster/vector shapefile into smaller tiles
+    Make a splitter shapefile for splitting a large raster/vector shapefile into smaller tiles.
+    Then split the large shapefile into smaller tiles.
+    Finally, rasterize the smaller shapefiles into tif files.
     '''
+    outdir = Path(f'{input_shp_fname.parent}/{input_shp_fname.stem}_split/')
+    outdir.mkdir(parents=True, exist_ok=True)
 
     dem_box = gpd.read_file(input_shp_fname).total_bounds
     _, splitter_gdf = gen_splitter(dem_box, dl=0.5, overlap_ratio=0.01)
 
-    outdir = Path(f'{input_shp_fname.parent}/{input_shp_fname.stem}_split/')
-    outdir.mkdir(parents=True, exist_ok=True)
-
+    splitter_gdf.to_file(f'{outdir}/splitter.shp')
     split_shps = split_vector_shp(input_shp_fname, splitter_gdf, outdir)
     for split_shp in split_shps:
         rasterize_shp(split_shp)
@@ -490,4 +490,5 @@ def test(input_shp_fname):
 
 
 if __name__ == '__main__':
-    test
+    SHP_FNAME = Path('/sciclone/schism10/Hgrid_projects/STOFS3D-v8/v46/Shapefiles/nhd_area_clipped.shp')
+    test(SHP_FNAME)
