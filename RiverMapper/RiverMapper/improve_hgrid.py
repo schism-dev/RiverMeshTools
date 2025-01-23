@@ -680,8 +680,8 @@ def test():
     improve_hgrid(gd_meter, n_intersection_fix=0, area_threshold=area_threshold, skewness_threshold=skewness_threshold, nmax=4)
 
 def test2():
-    grid_dir = '/sciclone/schism10/Hgrid_projects/STOFS3D-v8/v43s2_RiverMapper/v44/Improve/'
-    grid_file = f'{grid_dir}/v44.2dm'
+    grid_dir = '/sciclone/schism10/Hgrid_projects/STOFS3D-v8/v23.3/Improve/'
+    grid_file = f'{grid_dir}/v23.3.2dm'
 
     gd = sms2grd(grid_file)  # esri:102008
     gd.save(f'{grid_dir}/hgrid.gr3')
@@ -690,11 +690,11 @@ def test2():
     # this test may find any potential boundary issues
     gd.compute_area()
     gd.compute_bnd(method=1)
-    
+
     # manually set parameters
-    skewness_threshold = 75
+    skewness_threshold = 35
     area_threshold = 1
-    
+
     gd_ll = copy.deepcopy(gd)
     gd_ll.proj(prj0='esri:102008', prj1='epsg:4326')  # reproject to lon/lat if necessary
 
@@ -703,6 +703,7 @@ def test2():
 
     # improve grid quality
     improve_hgrid(gd, n_intersection_fix=0, area_threshold=area_threshold, skewness_threshold=skewness_threshold, nmax=4)
+
 
 def main():
     # Sample usage , the horizontal coordinate unit of hgrid must be in meters
@@ -718,4 +719,4 @@ def main():
 
 if __name__ == "__main__":
     test2()
-    pass
+    # main()

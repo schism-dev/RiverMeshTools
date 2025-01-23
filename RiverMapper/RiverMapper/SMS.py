@@ -383,7 +383,7 @@ class SMS_MAP():
         self.detached_nodes = np.r_[self.detached_nodes, other.detached_nodes]
         return SMS_MAP(arcs=self.arcs, detached_nodes=self.detached_nodes, epsg=self.epsg)
 
-    def get_xyz(self):
+    def get_xyz(self, reverse_arc=False):
         """Get xyz coordinates of all arcs and detached nodes,
         and local-to-global node indices mapping"""
 
@@ -397,6 +397,10 @@ class SMS_MAP():
         self.xyz = np.zeros((self.n_xyz, 3), dtype=float)
         for ids, arc in zip(self.l2g, self.arcs):
             self.xyz[ids, :] = arc.points
+
+        if reverse_arc:
+            for i, this_l2g in enumerate(self.l2g):
+                self.l2g[i] = this_l2g[::-1]
 
         return self.xyz, self.l2g
 
@@ -581,8 +585,14 @@ def get_all_points_from_shp(fname, silent=True, get_z=False):
     npts = 0
     nvalid_shps = 0
     for i in range(shapefile.shape[0]):
+        # cannot take multiparts
+        if shapefile.iloc[i, :]['geometry'].geom_type == 'MultiLineString':
+            raise ValueError("MultiLineString not supported")
         try:
             shp_points = np.array(shapefile.iloc[i, :]['geometry'].coords.xy).shape[1]
+        except AttributeError: # nEw
+            print(f"warning: shape {i+1} of {shapefile.shape[0]} is invalid")
+            continue
         except NotImplementedError:  # nEw
             print(f"warning: shape {i+1} of {shapefile.shape[0]} is invalid")
             continue
@@ -600,6 +610,9 @@ def get_all_points_from_shp(fname, silent=True, get_z=False):
     for i in range(shapefile.shape[0]):
         try:
             shp_points = np.array(shapefile.iloc[i, :]['geometry'].coords.xy).shape[1]
+        except AttributeError:  # nEw
+            print(f"warning: shape {i+1} of {shapefile.shape[0]} is invalid")
+            continue
         except NotImplementedError:  # nEw
             print(f"warning: shape {i+1} of {shapefile.shape[0]} is invalid")
             continue

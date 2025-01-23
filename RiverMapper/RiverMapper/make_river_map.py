@@ -554,8 +554,6 @@ def get_two_banks(S_list, thalweg, thalweg_eta, search_length, search_steps, min
     x_banks_right, y_banks_right = get_bank(
         S_list, thalweg[:, 0], thalweg[:, 1], thalweg_eta, xt_right, yt_right, search_steps, elev_scale)
 
-    # get attributes of the initial banks
-    # average width, for deciding nudging distance
     if x_banks_left is None or x_banks_right is None:
         logger.warning('warning: elev value is None, failed to find banks ... ')
         status = -2  # status = -2 means bank search failure
@@ -581,25 +579,33 @@ def get_two_banks(S_list, thalweg, thalweg_eta, search_length, search_steps, min
 def redistribute_arc(
     line, line_smooth, channel_width, this_nrow_arcs,
     smooth_option=1, R_coef=0.4, length_width_ratio=6.0,
-    reso_thres=(5, 300), endpoints_scale=1.0, idryrun=False
+    reso_thres=(5, 300), endpoints_scale=1.0, idryrun=False,
+    pinned_points=None,
 ):
     '''
     Redistribute points along the line according to the curvature
     and the channel width, so that finer resolution is used in the
     curvy and narrow sections.
     Optionally, increase the resolution near the endpoints for better intersections
+
+    pinned_points: a boolean array to indicate which points are retained regardless of the resolution
     '''
 
-    cross_channel_length_scale = channel_width / (this_nrow_arcs-1)
+    if pinned_points is None:
+        pinned_points = np.zeros((line.shape[0]), dtype=bool)  # no pinned points
 
+    # initialize retained_points, all points are retained at first but may be removed later
+    # , except for the pinned points which are always retained
     retained_points = np.ones((line.shape[0]), dtype=bool)
+
+    cross_channel_length_scale = channel_width / (this_nrow_arcs-1)
 
     if line.shape[0] < 2:
         logger.warning('warning: line only has one point, no need for redistributing')
         return line, line_smooth, np.zeros(line.shape[0], dtype=float), retained_points
 
     # along-river distance, for redistribution
-    increment_along_thalweg = get_dist_increment(line)
+    increment_along_thalweg = get_dist_increment(line[:, :2])
 
     # # smooth curvature to get rid of small-scale zig-zags
     if smooth_option == -1:  # existing line_smooth
@@ -620,6 +626,8 @@ def redistribute_arc(
         line_smooth = np.c_[xint, yint]
         curv_sp = curvature(line_smooth)
         curv = curv_sp[::smooth_factor]
+    else:
+        raise ValueError('unknown smooth_option')
 
     # plt.scatter(line_smooth[:, 0], line_smooth[:, 1])
     # plt.scatter(line[:, 0], line[:, 1], s=0.3)
@@ -658,8 +666,8 @@ def redistribute_arc(
     idx = 0
     this_seg_length = increment_along_thalweg[0]  # dist between pt0 and pt1
     while idx < len(increment_along_thalweg)-1:  # loop over original points
-        if this_seg_length < river_resolution_seg[idx]:
-            retained_points[idx+1] = False  # remove point if the seg is too short
+        if (this_seg_length < river_resolution_seg[idx]) and (not pinned_points[idx+1]):
+            retained_points[idx+1] = False  # remove idx+1 if the seg between idx and idx+1 is too short
             this_seg_length += increment_along_thalweg[idx+1]  # add the next seg
         else:
             this_seg_length = increment_along_thalweg[idx+1]  # reset the seg length
@@ -1065,6 +1073,7 @@ def clean_intersections(
     else:
         raise TypeError()
 
+    target_poly_gdf = None  # initialize
     if isinstance(target_polygons, list):
         target_poly_gdf = list2gdf(target_polygons)
     elif isinstance(target_polygons, gpd.GeoDataFrame):
@@ -1392,7 +1401,7 @@ def correct_thalwegs(S_list, dl, line, search_length, perp, mpi_print_prefix, el
     x_real = x_new[range(len(x)), left_or_right.astype(int)]  # if left higher than right, then use right
     y_real = y_new[range(len(x)), left_or_right.astype(int)]
 
-    return np.c_[x_real, y_real], i_corrected
+    return np.c_[x_real, y_real, line[:, 2]], i_corrected
 
 
 def get_bank(S_list, x, y, thalweg_eta, xt, yt, search_steps=100, elev_scale=1.0):
@@ -1416,11 +1425,16 @@ def get_bank(S_list, x, y, thalweg_eta, xt, yt, search_steps=100, elev_scale=1.0
         return None, None  # return None for the bank
 
     # elevs is well defined if this step is reached
-    d_eta = elevs - eta_stream  # closeness to target depth
-    bank_idx = np.argmax(d_eta > 0, axis=1)
+    d_eta = elevs - eta_stream  # closeness to target depth, negative means under water
 
-    invalid = bank_idx == 0
+    bank_idx = np.argmax(d_eta >= 0, axis=1)
+
+    invalid = bank_idx == 0  # thalweg is bank, meaning the width is very narrow
     bank_idx[invalid] = np.argmin(abs(d_eta[invalid, :]), axis=1)
+
+    # special case: all water, not reaching land
+    all_water = np.all(d_eta < 0, axis=1)
+    bank_idx[all_water] = search_steps - 1  # last point, as wide as possible
 
     # R_sort_idx = np.argsort(d_eta)
     # bank_idx = np.min(R_sort_idx[:, :min(search_steps, search_tolerance)], axis=1) # search_tolerance=5
@@ -1448,6 +1462,7 @@ def make_river_map(
         snap_arc_reso_ratio=ConfigRiverMap.DEFAULT_snap_arc_reso_ratio,
         n_clean_iter=ConfigRiverMap.DEFAULT_n_clean_iter,
         i_close_poly=ConfigRiverMap.DEFAULT_i_close_poly,
+        i_nudge_banks=ConfigRiverMap.DEFAULT_i_nudge_banks,
         i_smooth_banks=ConfigRiverMap.DEFAULT_i_smooth_banks,
         output_prefix=ConfigRiverMap.DEFAULT_output_prefix,
         mpi_print_prefix=ConfigRiverMap.DEFAULT_mpi_print_prefix,
@@ -1505,6 +1520,7 @@ def make_river_map(
     more iterations produce cleaner intersections and better channel connectivity |
 
     | i_close_poly | bool | whether to add cross-channel arcs to enclose river arcs into a polygon |
+    | i_nudge_banks | bool | whether to nudge the river banks so that river width is within a range |
     | i_smooth_banks | bool | whether to smooth the river banks at abrupt changes of the curvature |
 
     | i_DEM_cache  | bool | Whether or not to read DEM info from cache.
@@ -1544,7 +1560,7 @@ def make_river_map(
         endpoints_scale = 1.0
     else:
         require_dem = True
-        endpoints_scale = 1.3
+        endpoints_scale = 1.3  # slightly refine near the endpoints to improve connectivity
 
     if custom_width2narcs is not None:
         if width2narcs_option != 'custom':
@@ -1554,7 +1570,7 @@ def make_river_map(
             )
             width2narcs_option = 'custom'
 
-        # decorate the function to accept same parameters as default_width2narcs
+        # decorate the function to accept the same parameters as default_width2narcs
         def decorated_custom_width2narcs(width, min_arcs=min_arcs, opt=width2narcs_option):
             if opt != 'custom':
                 raise ValueError('opt must be "custom"')
@@ -1629,7 +1645,7 @@ def make_river_map(
             raise ValueError('Fatal Error: no valid DEM tiles')
 
     # ------------------------- read thalweg ---------------------------
-    xyz, l2g, curv, _ = get_all_points_from_shp(thalweg_shp_fname)
+    xyz, l2g, curv, _ = get_all_points_from_shp(thalweg_shp_fname, get_z=True)
     xyz_lonlat = np.copy(xyz)
     xyz[:, 0], xyz[:, 1] = lonlat2cpp(xyz[:, 0], xyz[:, 1])
 
@@ -1680,8 +1696,8 @@ def make_river_map(
             thalwegs.append(xyz[idx, :])
             thalwegs_lonlat.append(xyz_lonlat[idx, :])
             thalwegs_curv.append(curv[idx])
-            thalweg_endpoints = np.r_[thalweg_endpoints, np.reshape(xyz[idx][0, :], (1, 2))]
-            thalweg_endpoints = np.r_[thalweg_endpoints, np.reshape(xyz[idx][-1, :], (1, 2))]
+            thalweg_endpoints = np.r_[thalweg_endpoints, np.reshape(xyz[idx][0, :2], (1, 2))]
+            thalweg_endpoints = np.r_[thalweg_endpoints, np.reshape(xyz[idx][-1, :2], (1, 2))]
             thalwegs_smooth.append(None)  # populated later in redistribute_arc
 
     # --------------------------------------------------------------------------------------
@@ -1710,11 +1726,11 @@ def make_river_map(
                 continue
 
             # set water level at each point along the thalweg, based on observation, simulation, estimation, etc.
-            if elev_scale < 0:  # invert z, often used for barrier island
-                # barrier islands are always nearshore, where 0.0 is a good approximation of the water level
-                thalweg_eta = 0.0 * elevs
-            else:  # normal case
-                # more sophisticated methods for water level approximation
+            if ikeep_thalweg[i] == 1 or elev_scale < 0:
+                # keep = 1 is reserved for NHD, where tifs are dummy with 0 (land) and -1 (water)
+                # barrier islands (when elev_scale<0) are always nearshore, where 0.0 is a good approximation
+                thalweg_eta = 0.0 * elevs  # set uniform water level at 0.0, same as land level
+            else:  # normal case, more sophisticated methods for water level approximation
                 thalweg_eta = set_eta_thalweg(thalweg[:, 0], thalweg[:, 1], elevs)
 
             x_banks_left, y_banks_left, x_banks_right, y_banks_right, _, width, bank_search_status = get_two_banks(
@@ -1843,7 +1859,7 @@ def make_river_map(
         thalweg, thalweg_smooth, _, retained_idx = redistribute_arc(
             thalweg, thalweg_smooth, width, this_nrow_arcs,
             R_coef=R_coef, length_width_ratio=length_width_ratio, reso_thres=along_channel_reso_thres,
-            smooth_option=1, endpoints_scale=endpoints_scale, idryrun=True
+            smooth_option=1, endpoints_scale=endpoints_scale, idryrun=True, pinned_points=thalweg[:, 2]
         )
         smoothed_thalwegs[i] = SMS_ARC(points=np.c_[thalweg_smooth[:, 0], thalweg_smooth[:, 1]], src_prj='cpp')
         redistributed_thalwegs_pre_correction[i] = SMS_ARC(points=np.c_[thalweg[:, 0], thalweg[:, 1]], src_prj='cpp')
@@ -1856,6 +1872,7 @@ def make_river_map(
 
         # Find bank arcs and inner arcs
         # Under 4 cases (Case #), the quality_controlled flag is set to True
+        inner_arc_position = None
         quality_controlled = False
         if i_pseudo_channel == 1:  # for special features like levees and barrier islands
             quality_controlled = True  # (Case 1) always true for pseudo channel
@@ -1868,9 +1885,11 @@ def make_river_map(
             if elevs is None:
                 raise ValueError(f"{mpi_print_prefix} error: some elevs not found on thalweg {i+1} ...")
 
-            if elev_scale < 0:  # invert z for barrier island
-                thalweg_eta = 0.0 * elevs  # use 0 as an approximation of the water level
-            else:  # normal case
+            if ikeep_thalweg[i] == 1 or elev_scale < 0:
+                # keep = 1 is reserved for NHD, where tifs are dummy with 0 (land) and -1 (water)
+                # barrier islands (when elev_scale=-1) are always nearshore, where 0.0 is a good approximation
+                thalweg_eta = 0.0 * elevs  # set uniform water level at 0.0, same as land level
+            else:  # normal case, more sophisticated methods for water level approximation
                 thalweg_eta = set_eta_thalweg(thalweg[:, 0], thalweg[:, 1], elevs)
 
             # re-make banks based on redistributed thalweg
@@ -1908,9 +1927,11 @@ def make_river_map(
             elevs = get_elev_from_tiles(thalweg[:, 0], thalweg[:, 1], S_list, scale=elev_scale)
             if elevs is None:
                 raise ValueError(f"{mpi_print_prefix} error: some elevs not found on thalweg {i+1} ...")
-            if elev_scale < 0:  # invert z for barrier island
-                thalweg_eta = 0.0 * elevs
-            else:  # normal case
+            if ikeep_thalweg[i] == 1 or elev_scale < 0:
+                # keep = 1 is reserved for NHD, where tifs are dummy with 0 (land) and -1 (water)
+                # barrier islands (when elev_scale=-1) are always nearshore, where 0.0 is a good approximation
+                thalweg_eta = 0.0 * elevs  # set uniform water level at 0.0, same as land level
+            else:  # normal case, more sophisticated methods for water level approximation
                 thalweg_eta = set_eta_thalweg(thalweg[:, 0], thalweg[:, 1], elevs)
             # re-make banks based on corrected thalweg
             x_banks_left, y_banks_left, x_banks_right, y_banks_right, perp, width, bank_search_status = get_two_banks(
@@ -1932,7 +1953,7 @@ def make_river_map(
                 thalweg, thalweg_smooth[retained_idx], width, this_nrow_arcs,
                 R_coef=R_coef, length_width_ratio=length_width_ratio,
                 reso_thres=along_channel_reso_thres, smooth_option=1,
-                endpoints_scale=endpoints_scale
+                endpoints_scale=endpoints_scale, pinned_points=thalweg[:, 2]
             )
             smoothed_thalwegs[i] = SMS_ARC(
                 points=np.c_[thalweg_smooth[:, 0], thalweg_smooth[:, 1]], src_prj='cpp')
@@ -1947,9 +1968,11 @@ def make_river_map(
             elevs = get_elev_from_tiles(thalweg[:, 0], thalweg[:, 1], S_list, scale=elev_scale)
             if elevs is None:
                 raise ValueError(f"{mpi_print_prefix} error: some elevs not found on thalweg {i+1} ...")
-            if elev_scale < 0:  # invert z for barrier island
-                thalweg_eta = 0.0 * elevs
-            else:  # normal case
+            if ikeep_thalweg[i] == 1 or elev_scale < 0:
+                # keep = 1 is reserved for NHD, where tifs are dummy with 0 (land) and -1 (water)
+                # barrier islands (when elev_scale=-1) are always nearshore, where 0.0 is a good approximation
+                thalweg_eta = 0.0 * elevs  # set uniform water level at 0.0, same as land level
+            else:  # normal case, more sophisticated methods for water level approximation
                 thalweg_eta = set_eta_thalweg(thalweg[:, 0], thalweg[:, 1], elevs)
             # re-make banks based on redistributed thalweg
             x_banks_left, y_banks_left, x_banks_right, y_banks_right, perp, width, bank_search_status = get_two_banks(
@@ -1980,7 +2003,7 @@ def make_river_map(
                         pseudo_channel_width, nrow_pseudo_channel, R_coef=R_coef,
                         length_width_ratio=pseudo_channel_length_width_ratio,
                         reso_thres=(0.3*pseudo_channel_dl, 1.1*pseudo_channel_dl),
-                        smooth_option=1, endpoints_scale=endpoints_scale
+                        smooth_option=1, endpoints_scale=endpoints_scale, pinned_points=thalweg[:, 2]
                     )
                     smoothed_thalwegs[i] = SMS_ARC(
                         points=np.c_[thalweg_smooth[:, 0], thalweg_smooth[:, 1]], src_prj='cpp')
@@ -1992,11 +2015,11 @@ def make_river_map(
                     this_nrow_arcs = nrow_pseudo_channel
                     inner_arc_position = set_inner_arc_position(nrow_arcs=nrow_pseudo_channel, position_type='fake')
             else:  # normal case: touch-ups on the two banks
-                # nudge banks
-                x_banks_left, y_banks_left = nudge_bank(
-                    thalweg, perp+np.pi, x_banks_left, y_banks_left, dist=nudge_ratio*0.5*np.mean(width))
-                x_banks_right, y_banks_right = nudge_bank(
-                    thalweg, perp, x_banks_right, y_banks_right, dist=nudge_ratio*0.5*np.mean(width))
+                if i_nudge_banks:
+                    x_banks_left, y_banks_left = nudge_bank(
+                        thalweg, perp+np.pi, x_banks_left, y_banks_left, dist=nudge_ratio*0.5*np.mean(width))
+                    x_banks_right, y_banks_right = nudge_bank(
+                        thalweg, perp, x_banks_right, y_banks_right, dist=nudge_ratio*0.5*np.mean(width))
 
                 # smooth banks
                 if i_smooth_banks:
@@ -2022,6 +2045,8 @@ def make_river_map(
             # end if degenerate case
         # end if pseudo channel or real river arcs
 
+        if inner_arc_position is None:  # all cases should already set inner_arc_position, but just in case
+            raise ValueError(f"{mpi_print_prefix} error: inner_arc_position is None ...")
         # ------------------------- assemble arcs ---------------------------
         arc_position = np.r_[
             sorted(-outer_arcs_positions), inner_arc_position, 1.0+outer_arcs_positions
@@ -2034,7 +2059,9 @@ def make_river_map(
 
         # record cross-channel (cc) resolution at each thalweg point
         cross_channel_reso = width/(this_nrow_arcs-1)
-        for k, line in enumerate([np.c_[x_banks_left, y_banks_left], np.c_[x_banks_right, y_banks_right]]):
+        for k, line in enumerate(
+            [np.c_[x_banks_left, y_banks_left], np.c_[x_banks_right, y_banks_right]]
+        ):
             bank_arcs[i, k] = SMS_ARC(points=np.c_[line[:, 0], line[:, 1]], src_prj='cpp')
 
         # ------------------------- further quality control ---------------------------

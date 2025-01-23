@@ -41,6 +41,7 @@ class ConfigRiverMap():
     DEFAULT_snap_arc_reso_ratio = 0.2
     DEFAULT_n_clean_iter = 5
     DEFAULT_i_close_poly = True
+    DEFAULT_i_nudge_banks = True
     DEFAULT_i_smooth_banks = True
     DEFAULT_output_prefix = ''
     DEFAULT_mpi_print_prefix = ''
@@ -69,6 +70,7 @@ class ConfigRiverMap():
         snap_arc_reso_ratio=DEFAULT_snap_arc_reso_ratio,
         n_clean_iter=DEFAULT_n_clean_iter,
         i_close_poly=DEFAULT_i_close_poly,
+        i_nudge_banks=DEFAULT_i_nudge_banks,
         i_smooth_banks=DEFAULT_i_smooth_banks,
         output_prefix=DEFAULT_output_prefix,
         mpi_print_prefix=DEFAULT_mpi_print_prefix,
@@ -96,6 +98,7 @@ class ConfigRiverMap():
             'snap_arc_reso_ratio': snap_arc_reso_ratio,
             'n_clean_iter': n_clean_iter,
             'i_close_poly': i_close_poly,
+            'i_nudge_banks': i_nudge_banks,
             'i_smooth_banks': i_smooth_banks,
             'output_prefix': output_prefix,
             'mpi_print_prefix': mpi_print_prefix,
