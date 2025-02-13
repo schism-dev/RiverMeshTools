@@ -32,16 +32,17 @@ class Feeder():
         self.base = np.c_[np.mean(points_x[:, base_id]), np.mean(points_y[:, base_id])]
 
 
-def find_inlets_outlets2(line_map: SMS_MAP, boundary_gdf: gpd.GeoDataFrame):
+def find_inlets_outlets2(line_map: SMS_MAP, boundary_gdf: gpd.GeoDataFrame, reverse_arc=False):
     '''
     Find the index of the last inlet point (index is outside, index-1 is inside)
     of all rivers. The projection of the river and the polygon must be consistent.
+
+    Assuming the river points are arranged from downstream to upstream.
+    Otherwise, set reverse_arc=True.
     '''
 
     timer = time()
 
-    if not hasattr(line_map, 'l2g') or not hasattr(line_map, 'xyz'):
-        line_map.get_xyz()
     # ------------------------- find in-grid river points ---------------------------
     point_array = line_map.xyz[:, :2]
     points_gdf = gpd.GeoDataFrame(
@@ -55,6 +56,8 @@ def find_inlets_outlets2(line_map: SMS_MAP, boundary_gdf: gpd.GeoDataFrame):
     inlets = -np.ones(len(line_map.l2g), dtype=int)  # same length as the number of rivers
     outlets = -np.ones(len(line_map.l2g), dtype=int)
     for i, ids in enumerate(line_map.l2g):  # for each river
+        if reverse_arc:
+            ids = ids[::-1]  # reverse the order of the river points
         arc_points_inside = inside[ids]
         if np.any(arc_points_inside) and not np.all(arc_points_inside):  # crossing mesh boundary
             # last inlet, assuming the river points are arranged from down to upstream
@@ -105,15 +108,21 @@ def make_feeder_channel():
     # rivermap_fname = f'/sciclone/schism10/Hgrid_projects/STOFS3D-v7/v20.0/Feeder/total_river_arcs_extra.map'
     # grid_boundary_shp_fname = '/sciclone/schism10/Hgrid_projects/STOFS3D-v7/v20.0/Feeder/grid_boundary.shp'  # in esri:102008
 
-    output_dir = '/sciclone/schism10/Hgrid_projects/SECOFS/new22_JZ/Feeder'
-    rivermap_fname = '/sciclone/schism10/Hgrid_projects/SECOFS/new22_JZ/Feeder/total_river_arcs_extra.map'
-    grid_boundary_shp_fname = '/sciclone/schism10/Hgrid_projects/SECOFS/new22_JZ/Feeder/grid_boundary.shp'  # in esri:102008
-    reverse_arc = False
+    # output_dir = '/sciclone/schism10/Hgrid_projects/SECOFS/new22_JZ/Feeder'
+    # rivermap_fname = '/sciclone/schism10/Hgrid_projects/SECOFS/new22_JZ/Feeder/total_river_arcs_extra.map'
+    # grid_boundary_shp_fname = '/sciclone/schism10/Hgrid_projects/SECOFS/new22_JZ/Feeder/grid_boundary.shp'  # in esri:102008
+    # reverse_arc = False
 
-    output_dir = '/sciclone/schism10/Hgrid_projects/STOFS3D-v8/v23.1/Feeder/'
+    # output_dir = '/sciclone/schism10/Hgrid_projects/STOFS3D-v8/v23.1/Feeder/'
+    # rivermap_fname = f'{output_dir}/total_river_arcs_extra.map'
+    # grid_boundary_shp_fname = f'{output_dir}/grid_bnd.shp'  # no need to dissolve, must be in esri:102008
+    # reverse_arc = True  # used for NHD based river arcs
+
+    output_dir = '/sciclone/schism10/Hgrid_projects/STOFS3D-v8/v24.4/Feeder/'
     rivermap_fname = f'{output_dir}/total_river_arcs_extra.map'
     grid_boundary_shp_fname = f'{output_dir}/grid_bnd.shp'  # no need to dissolve, must be in esri:102008
-    reverse_arc = True
+    reverse_arc = True  # used for NHD based river arcs
+
     # -------------------- end inputs ----------------
 
     gdf = gpd.read_file(grid_boundary_shp_fname)
@@ -125,12 +134,11 @@ def make_feeder_channel():
     cache_fname = f'{rivermap_fname}.pkl'
     if Path(cache_fname).exists():
         with open(cache_fname, 'rb') as file:
-            river_map, xyz, l2g = pickle.load(file)
+            river_map = pickle.load(file)
     else:
         river_map = SMS_MAP(rivermap_fname)
-        xyz, l2g = river_map.get_xyz(reverse_arc=reverse_arc)
         with open(cache_fname, 'wb') as file:
-            pickle.dump([river_map, xyz, l2g], file)
+            pickle.dump(river_map, file)
 
     # calculate centerlines for each river
     n_rivers = 0  # number of rivers
@@ -166,7 +174,9 @@ def make_feeder_channel():
     timer = time()
 
     # find inlets and outlets
-    inlets, outlets = find_inlets_outlets2(line_map=centerline_map, boundary_gdf=mesh_bnd_gdf)
+    # inlets[i] is the index of the first point after an arc goes from inside to outside of the grid
+    inlets, outlets = find_inlets_outlets2(
+        line_map=centerline_map, boundary_gdf=mesh_bnd_gdf, reverse_arc=reverse_arc)
     print(f'finding inlets/outlets took {time()-timer} seconds')
     timer = time()
 
@@ -176,13 +186,14 @@ def make_feeder_channel():
     feeder_channel_extension = np.array([-10.0, -5.0, 0])
 
     # i_inlet_option is the index of the inlet point to be used for the feeder channel
+    # the number means how many points to go upstream from the last inlet point
     i_inlet_options = [2, 1, 0]
 
-    # get total number of river-arcs from all inlets
+    # get total number of river-arcs that cross the boundary
     n_inlets = sum(inlets > -1)
     narcs_rivers_inlets = sum(narcs_rivers[inlets > -1])
 
-    max_n_follow = 50  # follow the real river channel into the model domain for a few cross sections
+    max_n_follow = 10  # follow the real river channel into the model domain for a few cross sections
 
     # the number of feeder arcs = along-river arcs + cross-river arcs
     feeder_arcs = np.empty((
@@ -190,8 +201,8 @@ def make_feeder_channel():
     ), dtype=object)
 
     # the number of outlet arcs (only considering the base cross-river arc, since no pseudo channel is needed)
-    # is set as the same of the number of inlets, but most inlets don't have an outlet
-    outlet_arcs = np.empty((n_inlets, 1), dtype=object) # left bank and right bank for each thalweg
+    # is set as the same of the number of inlets for convenience, but most inlets don't have an outlet
+    outlet_arcs = np.empty((n_inlets, 1), dtype=object)  # left bank and right bank for each thalweg
 
     i = 0
     i_river = 0
@@ -202,7 +213,7 @@ def make_feeder_channel():
         this_inlets = inlets[i_river]  # inlets[range(i, i+narcs_rivers[i_river])]
         if this_inlets > 0:  # any(this_inlets>0)
             for i_inlet_option in i_inlet_options:
-                # follow riverarcs inside the domain as an extension of the feeder channel,
+                # follow river arcs inside the domain as an extension of the feeder channel,
                 # in order to avoid isolated feeder channels
                 feeder_base_pts = np.zeros((0, 3), dtype=float)
                 feeder_follow_pts = np.zeros((0, 3), dtype=float)
@@ -210,9 +221,13 @@ def make_feeder_channel():
                 inlet = min(this_inlets + i_inlet_option, len(river_map.arcs[i].points) - 1)
                 i_follow = np.arange(inlet-1, max(inlet-max_n_follow, -1), -1)  # [0, inlet-1], reversed
                 n_follow = len(i_follow)
+
                 for j in range(i, i+narcs_rivers[i_river]):  # along-channel arcs of a river
-                    feeder_base_pts = np.r_[feeder_base_pts, river_map.arcs[j].points[inlet, :].reshape(1,3)]
-                    feeder_follow_pts = np.r_[feeder_follow_pts, river_map.arcs[j].points[i_follow, :].reshape(-1,3)]
+                    river_points = river_map.arcs[j].points
+                    if reverse_arc:
+                        river_points = river_points[::-1, :]
+                    feeder_base_pts = np.r_[feeder_base_pts, river_points[inlet, :].reshape(1,3)]
+                    feeder_follow_pts = np.r_[feeder_follow_pts, river_points[i_follow, :].reshape(-1,3)]
 
                 perp = np.mean(get_perpendicular_angle(line=feeder_base_pts[[1, -1], :2]))
                 if reverse_arc:  # the cross channel arc is also reversed
@@ -230,8 +245,8 @@ def make_feeder_channel():
                     xt[:, k] = feeder_base_pts[:, 0] + feeder_channel_length[k] * np.cos(perp)
                     yt[:, k] = feeder_base_pts[:, 1] + feeder_channel_length[k] * np.sin(perp)
 
-                point_array =  np.c_[xt[:, i_inlet_option:len(feeder_channel_extension)].reshape(-1, 1),  # used to be i_inlet_option+1, needs to be checked
-                                     yt[:, i_inlet_option:len(feeder_channel_extension)].reshape(-1, 1)]
+                point_array = np.c_[xt[:, i_inlet_option:len(feeder_channel_extension)].reshape(-1, 1),  # used to be i_inlet_option+1, needs to be checked
+                                    yt[:, i_inlet_option:len(feeder_channel_extension)].reshape(-1, 1)]
                 if len(point_array) == 0:
                     break
                 points_gdf = gpd.GeoDataFrame(
@@ -270,7 +285,10 @@ def make_feeder_channel():
             outlet_base_pts = np.zeros((0, 3), dtype=float)
             outlet = this_outlets  # max(0, np.min(this_outlets[this_outlets!=-1]))
             for j in range(i, i+narcs_rivers[i_river]):  # inner arcs of a river
-                outlet_base_pts = np.r_[outlet_base_pts, river_map.arcs[j].points[outlet, :].reshape(1,3)]
+                river_points = river_map.arcs[j].points
+                if reverse_arc:
+                    river_points = river_points[::-1, :]
+                outlet_base_pts = np.r_[outlet_base_pts, river_points[outlet, :].reshape(1,3)]
                 outlet_arcs[n_outlet] = SMS_ARC(points=outlet_base_pts, src_prj='epsg:4326')
                 n_outlet += 1
 
@@ -280,6 +298,7 @@ def make_feeder_channel():
     if len(feeders) != n_inlets:
         raise Exception("Inconsistent number of inlets and feeder channels")
 
+    # -----------------------   write outputs   -----------------------
     feeders_map = SMS_MAP(arcs=feeder_arcs.reshape((-1, 1)))
     feeders_map.writer(filename=f'{output_dir}/feeders.map')
 

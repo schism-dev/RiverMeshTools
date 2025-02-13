@@ -29,9 +29,11 @@ import numpy as np
 import pandas as pd
 from scipy import interpolate
 from scipy.stats import zscore
-from scipy.spatial import cKDTree
+from scipy.spatial import cKDTree, KDTree
+import shapely
 from shapely.geometry import LineString, Point
 from shapely.ops import polygonize, unary_union
+from shapely.validation import explain_validity
 from rtree import index
 from geopandas.tools import sjoin
 from sklearn.neighbors import NearestNeighbors
@@ -281,17 +283,24 @@ def geos2SmsArcList(geoms=None):
 # ------------------------------------------------------------------
 # higher level functions for specific tasks involved in river map generation
 # ------------------------------------------------------------------
-def smooth_thalweg(line, ang_diff_shres=np.pi/2.4, nmax=100, smooth_coef=0.2, option=2):
+def smooth_thalweg(
+    line, ang_diff_shres=np.pi/2.4, nmax=100, smooth_coef=0.2,
+    pinned_points=None, option=2
+):
     '''Smooth the thalweg by removing sharp turns'''
 
     xs = line[:, 0]
     ys = line[:, 1]
 
+    if pinned_points is None:
+        pinned_points = np.zeros((line.shape[0], ), dtype=bool)
+
     n = 0
     while n < nmax:
         # pad with zeros at both ends, so end points will not be identified as sharp turns
         angle_diffs = np.r_[0.0, get_angle_diffs(line[:, 0], line[:, 1]), 0.0]
-        sharp_turns = np.argwhere(abs(angle_diffs) > ang_diff_shres)[:, 0]
+        sharp_turn_idx = abs(angle_diffs) > ang_diff_shres
+        sharp_turns = np.argwhere(sharp_turn_idx)[:, 0]
         if not sharp_turns.size:
             break
         else:
@@ -308,9 +317,12 @@ def smooth_thalweg(line, ang_diff_shres=np.pi/2.4, nmax=100, smooth_coef=0.2, op
                     + ys[sharp_turns] * (1-smooth_coef)
                 )
             elif option == 2:
-                # Option 2: remove the sharp turn point, at least the end points are preserved,
-                # because the angles are padded with zeros at both ends
-                line = np.delete(line, sharp_turns, axis=0)
+                # Option 2: remove the sharp turn points.
+                # The end points are preserved because the angles are padded with zeros at both ends
+                # do not remove pinned points
+                remove_idx = np.logical_and(sharp_turn_idx, ~pinned_points.astype(bool))
+                line = line[~remove_idx, :]
+                pinned_points = pinned_points[~remove_idx]
 
             n += 1
 
@@ -666,7 +678,7 @@ def redistribute_arc(
     idx = 0
     this_seg_length = increment_along_thalweg[0]  # dist between pt0 and pt1
     while idx < len(increment_along_thalweg)-1:  # loop over original points
-        if (this_seg_length < river_resolution_seg[idx]) and (not pinned_points[idx+1]):
+        if (this_seg_length < river_resolution_seg[idx]) and (pinned_points[idx+1] == 0):
             retained_points[idx+1] = False  # remove idx+1 if the seg between idx and idx+1 is too short
             this_seg_length += increment_along_thalweg[idx+1]  # add the next seg
         else:
@@ -1277,14 +1289,30 @@ def output_ocsmesh(
 
         # Check if each of these intersecting polygons is largely within the current river_poly
         for _, poly in intersecting_polys.iterrows():
-            # Calculate the intersection area
-            intersection_area = poly['geometry'].intersection(river_poly['geometry']).area
-            # Calculate the original area of the polygon
-            original_area = poly['geometry'].area
+            try:
+                # Validate geometries before performing operations
+                if not poly['geometry'].is_valid:
+                    logger.warning(f"Invalid geometry detected in poly: {explain_validity(poly['geometry'])}")
+                    poly['geometry'] = poly['geometry'].buffer(0)  # Attempt to fix the geometry
 
-            # Check if a big portion the original area is within the river polygon
-            if intersection_area / original_area > area_thres:
-                poly_idx.append(poly.name)
+                if not river_poly['geometry'].is_valid:
+                    logger.warning(f"Invalid river geometry detected: {explain_validity(river_poly['geometry'])}")
+                    river_poly['geometry'] = river_poly['geometry'].buffer(0)  # Attempt to fix the geometry
+
+                # Calculate the intersection area
+                intersection_area = poly['geometry'].intersection(river_poly['geometry']).area
+
+                # Calculate the original area of the polygon
+                original_area = poly['geometry'].area
+
+                # Check if a big portion of the original area is within the river polygon
+                if intersection_area / original_area > area_thres:
+                    poly_idx.append(poly.name)
+
+            except shapely.errors.GEOSException as e:
+                logger.error(f"GEOSException during intersection calculation: {e}")
+                continue  # Skip this polygon and move to the next one
+
     gpd.GeoDataFrame(
         crs=CPP_CRS, geometry=total_polys_cpp.loc[poly_idx, 'geometry']
     ).to_crs('epsg:4326').to_file(
@@ -1646,6 +1674,13 @@ def make_river_map(
 
     # ------------------------- read thalweg ---------------------------
     xyz, l2g, curv, _ = get_all_points_from_shp(thalweg_shp_fname, get_z=True)
+
+    # find duplicated points, which are intersections of thalwegs
+    # set z = 1 for these points, i.e., pinned points not to be moved 
+    distances, _ = KDTree(xyz).query(xyz, k=2)  # k=2 includes the point itself
+    duplicates = distances[:, 1] == 0
+    xyz[duplicates, 2] += 1  # if any pre-existing z is 1 (manually set in the shapefile), it will be 2
+
     xyz_lonlat = np.copy(xyz)
     xyz[:, 0], xyz[:, 1] = lonlat2cpp(xyz[:, 0], xyz[:, 1])
 
@@ -1822,9 +1857,6 @@ def make_river_map(
     ):
         # logger.info(f'{mpi_print_prefix} Wet run: Arc {i+1} of {len(thalwegs)}')
 
-        # if thalweg_id[i] != '10694':
-        #     continue
-
         if idummy_thalweg[i]:
             logger.info("%s Thalweg %d is dummy, skipping and keep original arcs ...", mpi_print_prefix, i)
             # use along-thalweg resolution as a substitute of cross-channel resolution
@@ -1961,7 +1993,7 @@ def make_river_map(
                 points=np.c_[thalweg[:, 0], thalweg[:, 1]], src_prj='cpp')
 
             # Smooth thalweg
-            thalweg, perp = smooth_thalweg(thalweg, ang_diff_shres=np.pi/2.4)
+            thalweg, perp = smooth_thalweg(thalweg, ang_diff_shres=np.pi/2.4, pinned_points=thalweg[:, 2])
             final_thalwegs[i] = SMS_ARC(points=np.c_[thalweg[:, 0], thalweg[:, 1]], src_prj='cpp')
 
             # update thalweg z

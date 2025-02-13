@@ -9,10 +9,16 @@ the grid file can be in 2dm, gr3, or ll format
 Also see other sample usages in the main function.
 """
 
+import socket
 from pylib import schism_grid, sms2grd
 from pylib import proj_pts, read_schism_bpfile, schism_bpfile
 
-from pylib_experimental.schism_file import cread_schism_hgrid
+if 'gulf' in socket.gethostname():
+    from pylib_experimental.schism_file import cread_schism_hgrid as read_schism_hgrid
+    print('Using c++ function to accelerate hgrid reading')
+else:
+    from pylib import schism_grid as read_schism_hgrid
+    print('Using python function to read hgrid')
 
 # pylib is a python library that handles many schism-related file manipulations by Dr. Zhengui Wang
 # , which can be installed by "pip install git+https://github.com/wzhengui/pylibs.git"
@@ -534,7 +540,7 @@ def write_diagnostics(outdir=None, grid_quality=None, hgrid_ref=None):
         skew_ele_bp = schism_bpfile(x=hgrid_ref.xctr[grid_quality['skew_ele']], y=hgrid_ref.yctr[grid_quality['skew_ele']])
         skew_ele_bp.write(f'{outdir}/skew_ele.bp')
 
-def improve_hgrid(gd, prj='esri:102008', skewness_threshold=30, area_threshold=5, load_bathy=False, n_intersection_fix=0, nmax=5):
+def improve_hgrid(gd, prj='esri:102008', skewness_threshold=35, area_threshold=1,n_intersection_fix=0, nmax=5):
     '''
     Fix small and skew elements and bad quads
     prj: needs to specify hgrid's projection (the unit must be in meters)
@@ -659,7 +665,7 @@ def test():
     grid_file = f'{grid_dir}/merged.gr3'
 
     # this test may find any potential boundary issues
-    gd = cread_schism_hgrid(grid_file)
+    gd = read_schism_hgrid(grid_file)
     gd.compute_area()
     gd.compute_bnd(method=1)
 
@@ -679,13 +685,12 @@ def test():
     # improve grid quality
     improve_hgrid(gd_meter, n_intersection_fix=0, area_threshold=area_threshold, skewness_threshold=skewness_threshold, nmax=4)
 
-def test2():
-    grid_dir = '/sciclone/schism10/Hgrid_projects/STOFS3D-v8/v23.3/Improve/'
-    grid_file = f'{grid_dir}/v23.3.2dm'
 
-    gd = sms2grd(grid_file)  # esri:102008
-    gd.save(f'{grid_dir}/hgrid.gr3')
-    gd = schism_grid(f'{grid_dir}/hgrid.gr3')
+def test2():
+    grid_dir = '/sciclone/schism10/Hgrid_projects/STOFS3D-v8/v24.6/Improve/'
+    grid_file = f'{grid_dir}/merged.gr3'
+
+    gd = read_schism_hgrid(grid_file)  # sms2grd(grid_file)  # esri:102008
 
     # this test may find any potential boundary issues
     gd.compute_area()
@@ -706,17 +711,22 @@ def test2():
 
 
 def main():
+    '''
     # Sample usage , the horizontal coordinate unit of hgrid must be in meters
+    # if you grid is in lon/lat, convert it to meters after reading, e.g.:
+    # gd.proj(prj0='epsg:4326', prj1='esri:102008')
+    '''
     grid_file, skewness_threshold, area_threshold = cmd_line_interface()
-    gd_meter = schism_grid(grid_file)
+    gd = read_schism_hgrid(grid_file)
+    gd.proj(prj0='epsg:4326', prj1='esri:102008')
 
     # sanity check for illegal boundaries, in case of which this step will hang
-    gd_meter.compute_bnd(method=1)
+    gd.compute_bnd(method=1)
 
     # improve grid quality
-    improve_hgrid(gd_meter, n_intersection_fix=0, area_threshold=area_threshold, skewness_threshold=skewness_threshold, nmax=4)
+    improve_hgrid(gd, n_intersection_fix=0, area_threshold=area_threshold, skewness_threshold=skewness_threshold, nmax=4)
 
 
 if __name__ == "__main__":
-    test2()
-    # main()
+    # test2()
+    main()
