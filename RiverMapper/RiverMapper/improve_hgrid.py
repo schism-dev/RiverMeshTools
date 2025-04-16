@@ -10,6 +10,7 @@ Also see other sample usages in the main function.
 """
 
 import socket
+import sys
 from pylib import schism_grid, sms2grd
 from pylib import proj_pts, read_schism_bpfile, schism_bpfile
 
@@ -41,8 +42,8 @@ def cmd_line_interface():
     parser = argparse.ArgumentParser(description="Input a grid file to fix small/skew elements.")
 
     parser.add_argument("grid", type=str, help="Path to the grid file to be fixed")
-    parser.add_argument("--skewness_threshold", type=float, default=30.0, help="Maximum skewness allowed for an element, skewness assumes the definition in xmgredit, i.e., based on the ratio between the longest edge and the equivalent radius")
-    parser.add_argument("--area_threshold", type=float, default=5.0, help="Minimum area allowed for an element")
+    parser.add_argument("--skewness_threshold", type=float, default=35.0, help="Maximum skewness allowed for an element, skewness assumes the definition in xmgredit, i.e., based on the ratio between the longest edge and the equivalent radius")
+    parser.add_argument("--area_threshold", type=float, default=1.0, help="Minimum area allowed for an element")
 
     args = parser.parse_args()
 
@@ -351,6 +352,7 @@ def reduce_bad_elements(
 
     return gd
 
+
 def grid_element_relax(gd, target_points=None, niter=3, ntier=0, max_dist=50, min_area_allowed=1e-3, wdir=None, output_fname=None):
     '''
     Relax specified element nodes to improve grid quality.
@@ -454,7 +456,28 @@ def grid_element_relax(gd, target_points=None, niter=3, ntier=0, max_dist=50, mi
 
     return gd
 
-def quality_check_hgrid(gd, outdir='./', area_threshold=None, skewness_threshold=None):
+
+def cal_skewnewss(gd):
+    '''
+    Calculate skewness (longest_side_length/quivalent_element_radius) of each element
+    '''
+    if not hasattr(gd, 'dpe'):
+        gd.compute_ctr()
+    if not hasattr(gd, 'distj'):
+        gd.compute_side(fmt=2)
+    if not hasattr(gd, 'elside'):
+        gd.compute_ic3()
+    if not hasattr(gd, 'area'):
+        gd.compute_area()
+
+    distj = gd.distj[gd.elside]
+    distj[gd.elside == -1] = 0  # side length
+
+    gd.skewness = distj.max(axis=1)/np.sqrt(np.maximum(gd.area/np.pi, sys.float_info.epsilon))
+    return gd.skewness
+
+
+def quality_check_hgrid(gd, area_threshold=None, skewness_threshold=None):
     '''
     Check several types of grid issues that may crash the model,
     including small and skew elements, and negative area elements.
@@ -484,21 +507,20 @@ def quality_check_hgrid(gd, outdir='./', area_threshold=None, skewness_threshold
     small_ele = np.argwhere(i_small_ele).flatten()
     if n_small_ele > 0:
         print(f'Element id:            area,             xctr,             yctr')
-        for ie in sorted_idx[:min(20, n_small_ele)]:
+        for ie in sorted_idx[:min(100, n_small_ele)]:
             print(f'Element {ie+1}: {gd.area[ie]}, {gd.xctr[ie]}, {gd.yctr[ie]}')
 
     # skew elements
-    # skew_ele = gd.check_skew_elems(angle_min=skewness_threshold, fmt=1, fname=None)
-    # print(f'\n{len(skew_ele)} skew (min angle < {skewness_threshold})')
     skew_ele = gd.check_skew_elems(threshold=skewness_threshold)
     print(f'\n{len(skew_ele)} skew (skewness >= {skewness_threshold})')
     if len(skew_ele) > 0:
-        sorted_idx = np.argsort(gd.area[skew_ele])
-        sorted_skew_ele = np.sort(gd.area[skew_ele])
-        print(f'Element id:            area,             xctr,             yctr')
-        for i in sorted_idx[:min(20, len(sorted_skew_ele))]:
+        gd.skewness = cal_skewnewss(gd)
+        sorted_idx = np.argsort(gd.skewness[skew_ele])[::-1] 
+        sorted_skew_ele = np.sort(gd.skewness[skew_ele])[::-1] 
+        print(f'Element id:            skewness,             xctr,             yctr')
+        for i in sorted_idx[:min(100, len(sorted_skew_ele))]:
             ie = skew_ele[i]
-            print(f'Element {ie+1}: {gd.area[ie]}, {gd.xctr[ie]}, {gd.yctr[ie]}')
+            print(f'Element {ie+1}: {gd.skewness[ie]}, {gd.xctr[ie]}, {gd.yctr[ie]}')
 
     invalid = np.unique(np.array([*skew_ele, *small_ele]))
     if len(invalid) > 0:
@@ -509,8 +531,9 @@ def quality_check_hgrid(gd, outdir='./', area_threshold=None, skewness_threshold
         invalid_neighbors = invalid_neighbors[invalid_neighbors>=0]
         i_invalid_nodes = np.zeros((gd.np, ), dtype=bool)
         i_invalid_nodes[invalid_elnode] = True  # set invalid nodes to be "not fixed", i.e., can be tweaked.
-
-        # SMS_MAP(detached_nodes=np.c_[gd.xctr[invalid_neighbors], gd.yctr[invalid_neighbors], gd.yctr[invalid_neighbors]*0]).writer(f'{outdir}/invalid_element_relax.map')
+        # SMS_MAP(detached_nodes=np.c_[
+        #     gd.xctr[invalid_neighbors], gd.yctr[invalid_neighbors], gd.yctr[invalid_neighbors]*0
+        # ]).writer(f'{outdir}/invalid_element_relax.map')
     else:
         invalid_elnode = None
         invalid_neighbors = None
@@ -540,6 +563,7 @@ def write_diagnostics(outdir=None, grid_quality=None, hgrid_ref=None):
         skew_ele_bp = schism_bpfile(x=hgrid_ref.xctr[grid_quality['skew_ele']], y=hgrid_ref.yctr[grid_quality['skew_ele']])
         skew_ele_bp.write(f'{outdir}/skew_ele.bp')
 
+
 def improve_hgrid(gd, prj='esri:102008', skewness_threshold=35, area_threshold=1,n_intersection_fix=0, nmax=5):
     '''
     Fix small and skew elements and bad quads
@@ -558,7 +582,7 @@ def improve_hgrid(gd, prj='esri:102008', skewness_threshold=35, area_threshold=1
     while True:
         n_fix += 1
 
-        grid_quality = quality_check_hgrid(gd, outdir=dirname, area_threshold=area_threshold, skewness_threshold=skewness_threshold)
+        grid_quality = quality_check_hgrid(gd, area_threshold=area_threshold, skewness_threshold=skewness_threshold)
         i_target_nodes = grid_quality['i_invalid_nodes']  # may be appended
 
         if i_target_nodes is None:  # all targets fixed
@@ -588,7 +612,7 @@ def improve_hgrid(gd, prj='esri:102008', skewness_threshold=35, area_threshold=1
                         gd.save(new_gr3_name)
                         print(f'the updated hgrid is saved as {new_gr3_name}')
                     # quality check again since gd is updated
-                    grid_quality = quality_check_hgrid(gd, outdir=dirname, area_threshold=area_threshold, skewness_threshold=skewness_threshold)['i_invalid_nodes']
+                    grid_quality = quality_check_hgrid(gd, area_threshold=area_threshold, skewness_threshold=skewness_threshold)['i_invalid_nodes']
                     if i_target_nodes is None: continue
 
             gd.compute_all(fmt=1)
@@ -611,7 +635,7 @@ def improve_hgrid(gd, prj='esri:102008', skewness_threshold=35, area_threshold=1
             )
 
             # quality check again since gd is updated
-            i_target_nodes = quality_check_hgrid(gd, outdir=dirname, area_threshold=area_threshold, skewness_threshold=skewness_threshold)['i_invalid_nodes']
+            i_target_nodes = quality_check_hgrid(gd, area_threshold=area_threshold, skewness_threshold=skewness_threshold)['i_invalid_nodes']
             if i_target_nodes is None: continue
 
             if n_fix <= n_intersection_fix:
@@ -650,7 +674,7 @@ def improve_hgrid(gd, prj='esri:102008', skewness_threshold=35, area_threshold=1
         # quality check again since gd is updated
         if prj != 'epsg:4326':
             gd.x, gd.y = gd_x, gd_y
-        i_target_nodes = quality_check_hgrid(gd, outdir=dirname, area_threshold=area_threshold, skewness_threshold=skewness_threshold)['i_invalid_nodes']
+        i_target_nodes = quality_check_hgrid(gd, area_threshold=area_threshold, skewness_threshold=skewness_threshold)['i_invalid_nodes']
         if prj != 'epsg:4326':
             gd.x, gd.y = gd_lon, gd_lat
 
@@ -660,9 +684,10 @@ def improve_hgrid(gd, prj='esri:102008', skewness_threshold=35, area_threshold=1
 
     pass
 
+
 def test():
-    grid_dir = '/sciclone/schism10/Hgrid_projects/TMP/'
-    grid_file = f'{grid_dir}/merged.gr3'
+    grid_dir = '/sciclone/schism10/feiye/STOFS3D-v8/R15e_v7/'
+    grid_file = f'{grid_dir}/hgrid_xy_transferred.ll'
 
     # this test may find any potential boundary issues
     gd = read_schism_hgrid(grid_file)
@@ -670,7 +695,7 @@ def test():
     gd.compute_bnd(method=1)
 
     # manually set parameters
-    skewness_threshold = 60
+    skewness_threshold = 44.5
     area_threshold = 5
     gd = schism_grid(grid_file)
 
@@ -679,7 +704,7 @@ def test():
     gd_meter = copy.deepcopy(gd)
     gd_meter.proj(prj0='epsg:4326', prj1='esri:102008')  # reproject to meters if necessary
 
-    grid_quality = quality_check_hgrid(gd_meter, outdir=grid_dir, area_threshold=area_threshold, skewness_threshold=skewness_threshold)
+    grid_quality = quality_check_hgrid(gd_meter, area_threshold=area_threshold, skewness_threshold=skewness_threshold)
     write_diagnostics(outdir=grid_dir, grid_quality=grid_quality, hgrid_ref=gd_ll)
 
     # improve grid quality
@@ -687,38 +712,40 @@ def test():
 
 
 def test2():
-    grid_dir = '/sciclone/schism10/Hgrid_projects/STOFS3D-v8/v24.6/Improve/'
-    grid_file = f'{grid_dir}/merged.gr3'
+    grid_dir = '/sciclone/schism10/Hgrid_projects/STOFS3D-v8/v31/Improve/'
+    grid_file = f'{grid_dir}/v31.2dm'
 
-    gd = read_schism_hgrid(grid_file)  # sms2grd(grid_file)  # esri:102008
+    # read hgrid
+    # gd = read_schism_hgrid(grid_file)  # esri:102008
+    gd = sms2grd(grid_file)
+    gd.source_file = grid_file
 
     # this test may find any potential boundary issues
     gd.compute_area()
     gd.compute_bnd(method=1)
 
     # manually set parameters
-    skewness_threshold = 35
+    skewness_threshold = 70
     area_threshold = 1
 
     gd_ll = copy.deepcopy(gd)
     gd_ll.proj(prj0='esri:102008', prj1='epsg:4326')  # reproject to lon/lat if necessary
 
-    grid_quality = quality_check_hgrid(gd, outdir=grid_dir, area_threshold=area_threshold, skewness_threshold=skewness_threshold)
+    grid_quality = quality_check_hgrid(gd, area_threshold=area_threshold, skewness_threshold=skewness_threshold)
     write_diagnostics(outdir=grid_dir, grid_quality=grid_quality, hgrid_ref=gd_ll)
 
     # improve grid quality
-    improve_hgrid(gd, n_intersection_fix=0, area_threshold=area_threshold, skewness_threshold=skewness_threshold, nmax=4)
+    improve_hgrid(gd, n_intersection_fix=0, area_threshold=area_threshold, skewness_threshold=skewness_threshold, nmax=2)
 
 
 def main():
     '''
     # Sample usage , the horizontal coordinate unit of hgrid must be in meters
-    # if you grid is in lon/lat, convert it to meters after reading, e.g.:
+    # if you grid is in lon/lat, convert it to meters first, e.g.:
     # gd.proj(prj0='epsg:4326', prj1='esri:102008')
     '''
     grid_file, skewness_threshold, area_threshold = cmd_line_interface()
     gd = read_schism_hgrid(grid_file)
-    gd.proj(prj0='epsg:4326', prj1='esri:102008')
 
     # sanity check for illegal boundaries, in case of which this step will hang
     gd.compute_bnd(method=1)
@@ -728,5 +755,5 @@ def main():
 
 
 if __name__ == "__main__":
-    # test2()
+    # test()
     main()

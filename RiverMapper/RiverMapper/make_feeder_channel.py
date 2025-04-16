@@ -86,7 +86,7 @@ def make_feeder_channel():
     which should be generated manually from the "lbnd + other" coverage
     to form the boundary of the grid.
     For SECOFS, this is lbnd_coastal;
-    For STOFS, this is lbnd_ocean.
+    For STOFS, this is lbnd_ocean, with the island between CB and DB removed.
     '''
 
     # ------------------- inputs -------------------
@@ -118,9 +118,19 @@ def make_feeder_channel():
     # grid_boundary_shp_fname = f'{output_dir}/grid_bnd.shp'  # no need to dissolve, must be in esri:102008
     # reverse_arc = True  # used for NHD based river arcs
 
-    output_dir = '/sciclone/schism10/Hgrid_projects/STOFS3D-v8/v24.4/Feeder/'
+    # output_dir = '/sciclone/schism10/Hgrid_projects/STOFS3D-v8/v24.4/Feeder/'
+    # rivermap_fname = f'{output_dir}/total_river_arcs_extra.map'
+    # grid_boundary_shp_fname = f'{output_dir}/grid_bnd.shp'  # no need to dissolve, must be in esri:102008
+    # reverse_arc = True  # used for NHD based river arcs
+
+    # output_dir = '/sciclone/schism10/Hgrid_projects/STOFS3D-v8/v31/Feeder/'
+    # rivermap_fname = f'{output_dir}/total_river_arcs_extra.map'
+    # grid_boundary_shp_fname = f'{output_dir}/lbnd_coastal_ocean.shp'  # grid_bnd, no need to dissolve, rm CBDB, must be in esri:102008
+    # reverse_arc = False  # used for NHD based river arcs
+
+    output_dir = '/sciclone/schism10/Hgrid_projects/STOFS3D-v8/v43s2_RiverMapper/v44/Feeder/'
     rivermap_fname = f'{output_dir}/total_river_arcs_extra.map'
-    grid_boundary_shp_fname = f'{output_dir}/grid_bnd.shp'  # no need to dissolve, must be in esri:102008
+    grid_boundary_shp_fname = f'{output_dir}/lbnd_coastal_mesh_bnd.shp'  # grid_bnd, no need to dissolve
     reverse_arc = True  # used for NHD based river arcs
 
     # -------------------- end inputs ----------------

@@ -42,7 +42,7 @@ class ConfigRiverMap():
     DEFAULT_n_clean_iter = 5
     DEFAULT_i_close_poly = True
     DEFAULT_i_nudge_banks = True
-    DEFAULT_i_smooth_banks = True
+    DEFAULT_i_smooth_banks = False
     DEFAULT_output_prefix = ''
     DEFAULT_mpi_print_prefix = ''
     DEFAULT_i_OCSMesh = True

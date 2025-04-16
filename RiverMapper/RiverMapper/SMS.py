@@ -588,7 +588,7 @@ def get_all_points_from_shp(fname, silent=True, get_z=False):
             raise ValueError("MultiLineString not supported")
         try:
             shp_points = np.array(shapefile.iloc[i, :]['geometry'].coords.xy).shape[1]
-        except AttributeError: # nEw
+        except AttributeError:  # nEw
             print(f"warning: shape {i+1} of {shapefile.shape[0]} is invalid")
             continue
         except NotImplementedError:  # nEw
@@ -616,7 +616,11 @@ def get_all_points_from_shp(fname, silent=True, get_z=False):
             continue
 
         if get_z:
-            xyz[ptr:ptr+shp_points] = np.array(shapefile.iloc[i, :]['geometry'].coords)
+            coords = np.array(shapefile.iloc[i, :]['geometry'].coords)
+            if coords.shape[1] == 3:
+                xyz[ptr:ptr+shp_points] = np.array(shapefile.iloc[i, :]['geometry'].coords)
+            elif coords.shape[1] == 2:
+                xyz[ptr:ptr+shp_points, :2] = np.array(shapefile.iloc[i, :]['geometry'].coords)
         else:
             xyz[ptr:ptr+shp_points] = np.array(shapefile.iloc[i, :]['geometry'].coords.xy).T
             # todo, this is more efficient: xyz = np.array(shapefile.iloc[i, :]['geometry'].coords)[:, :2]

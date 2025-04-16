@@ -21,6 +21,7 @@ import math
 import os
 import sys
 import time
+from glob import glob
 from tqdm import tqdm
 
 # Related third-party imports
@@ -45,6 +46,7 @@ from RiverMapper.SMS import (
     dl_lonlat2cpp, get_all_points_from_shp, get_perpendicular_angle,
     lonlat2cpp, write_river_shape_extra
 )
+from RiverMapper.SMS import cpp2lonlat
 from RiverMapper.river_map_tif_preproc import Tif2XYZ, get_elev_from_tiles
 from RiverMapper.config_river_map import ConfigRiverMap
 from RiverMapper.util import CPP_CRS, z_encoder
@@ -359,7 +361,7 @@ def river_quality(xs, ys, idx=None):
 def smooth_bank(line, xs, ys, xs_other_side, ys_other_side, ang_diff_shres=np.pi/2.4, nmax=100, smooth_coef=0.2):
     '''
     Smooth the bank by removing sharp turns.
-    Use with caution, because it may deviate from the real bank.
+    Use with caution, because the smoothed bank may deviate from the real bank.
     '''
     n = 0
     while n < nmax:
@@ -406,11 +408,13 @@ def smooth_bank(line, xs, ys, xs_other_side, ys_other_side, ang_diff_shres=np.pi
             tmp[idx, :] = (tmp_original[idx, :] + tmp_original[idx+1, :])/2
             tmp = np.insert(tmp, idx, (tmp_original[idx, :] + tmp_original[idx-1, :])/2, axis=0)
 
-            line = tmp[:, :2]
-            xs = tmp[:, 2]
-            ys = tmp[:, 3]
-            xs_other_side = tmp[:, 4]
-            ys_other_side = tmp[:, 5]
+            if line.shape[1] != 3:
+                raise ValueError(f'Error in smooth_bank: line should have three columns for x, y, z, but got {line}')
+            line = tmp[:, :3]
+            xs = tmp[:, 3]
+            ys = tmp[:, 4]
+            xs_other_side = tmp[:, 5]
+            ys_other_side = tmp[:, 6]
 
         n += 1
 
@@ -1292,11 +1296,19 @@ def output_ocsmesh(
             try:
                 # Validate geometries before performing operations
                 if not poly['geometry'].is_valid:
-                    logger.warning(f"Invalid geometry detected in poly: {explain_validity(poly['geometry'])}")
+                    warning_msg = (
+                        "Invalid geometry detected in poly: "
+                        f"{explain_validity(poly['geometry'])}"
+                    )
+                    logger.warning(warning_msg)
                     poly['geometry'] = poly['geometry'].buffer(0)  # Attempt to fix the geometry
 
                 if not river_poly['geometry'].is_valid:
-                    logger.warning(f"Invalid river geometry detected: {explain_validity(river_poly['geometry'])}")
+                    warning_msg = (
+                        "Invalid geometry detected in river_poly: "
+                        f"{explain_validity(river_poly['geometry'])}"
+                    )
+                    logger.warning(warning_msg)
                     river_poly['geometry'] = river_poly['geometry'].buffer(0)  # Attempt to fix the geometry
 
                 # Calculate the intersection area
@@ -1310,7 +1322,8 @@ def output_ocsmesh(
                     poly_idx.append(poly.name)
 
             except shapely.errors.GEOSException as e:
-                logger.error(f"GEOSException during intersection calculation: {e}")
+                err_msg = f"GEOSException during intersection calculation: {e}"
+                logger.error(err_msg)
                 continue  # Skip this polygon and move to the next one
 
     gpd.GeoDataFrame(
@@ -1321,8 +1334,11 @@ def output_ocsmesh(
 
     # write extra information to file
     logger.info('Writing extra river arc information to file ...')
+    extra_info_map = glob(f'{output_dir}/*river_arcs_extra.map')
+    if len(extra_info_map) != 1:
+        raise ValueError('There should be exactly one extra info map file.')
     write_river_shape_extra(
-        SMS_MAP(f'{output_dir}/total_river_arcs_extra.map'), f'{output_dir}/total_river_arcs_extra.shp')
+        SMS_MAP(extra_info_map[0]), f'{output_dir}/total_river_arcs_extra.shp')
 
     logger.info('Preparing OCSMesh products took: %s seconds.', time.time()-time_ocsmesh_start)
 
@@ -1673,20 +1689,28 @@ def make_river_map(
             raise ValueError('Fatal Error: no valid DEM tiles')
 
     # ------------------------- read thalweg ---------------------------
+    # In the shapefile, z > 0 means a point is pinned and not to be relocated or removed.
+    # The script will preserve the intersections of the input thalwegs automatically
+    # by incrementing z by 1 for these points,
+    # since they are important for the connectivity of the river network.
     xyz, l2g, curv, _ = get_all_points_from_shp(thalweg_shp_fname, get_z=True)
 
-    # find duplicated points, which are intersections of thalwegs
-    # set z = 1 for these points, i.e., pinned points not to be moved 
+    # Find duplicated points, which are intersections of thalwegs;
+    # increment z by 1 for these points
     distances, _ = KDTree(xyz).query(xyz, k=2)  # k=2 includes the point itself
     duplicates = distances[:, 1] == 0
-    xyz[duplicates, 2] += 1  # if any pre-existing z is 1 (manually set in the shapefile), it will be 2
+    xyz[duplicates, 2] += 1
 
     xyz_lonlat = np.copy(xyz)
     xyz[:, 0], xyz[:, 1] = lonlat2cpp(xyz[:, 0], xyz[:, 1])
 
+    # On the linestring level, additional attributes "dummy" and "keep" can be manually set in
+    # the shapefile to control the processing of thalwegs.
     # Read additional field (dummy) if available. All dummy thalwegs will be preserved as is.
     thalweg_gdf = gpd.read_file(thalweg_shp_fname)
-    # dummy arcs will be preserved as is
+
+    # "dummy" arcs will be preserved as is, without searching for banks and adding inner/outer arcs
+    # This is different from points with z > 0, which still searches for banks and adds inner/outer arcs
     if "dummy" in thalweg_gdf.columns:
         dummy = thalweg_gdf['dummy'].values
         logger.info(
@@ -1696,6 +1720,9 @@ def make_river_map(
     else:
         dummy = np.zeros((len(l2g), ), dtype=int)
 
+    # "keep" arcs will be processed regardless of other criteria,
+    # e.g., even when the banks are not found,
+    # in which case a pseudo channel will be generated
     if "keep" in thalweg_gdf.columns:
         keep = thalweg_gdf['keep'].values
         keep = np.where(np.isnan(keep), 0, keep).astype(int)  # replace NaN with 0 and convert to int
@@ -1707,6 +1734,7 @@ def make_river_map(
     else:
         keep = np.zeros((len(l2g), ), dtype=int)
 
+    # "id" field is used to identify thalwegs, which is useful for debugging
     if "id" in thalweg_gdf.columns:
         tid = thalweg_gdf['id'].values
     else:
@@ -1738,7 +1766,7 @@ def make_river_map(
     # --------------------------------------------------------------------------------------
     # ------Dry run (finding approximate locations of two banks) ---------------------------
     # --------------------------------------------------------------------------------------
-    logger.info('%s Dry run', mpi_print_prefix)
+    logger.info('\n%s  ------------------------- Dry run ------------------------- \n', mpi_print_prefix)
 
     thalweg_endpoints_width = np.full((len(thalwegs) * 2, 1), np.nan, dtype=float)
     # thalwegs_neighbors = np.empty((len(thalwegs), 2), dtype=object)  # [, 0] is head, [, 1] is tail
@@ -1760,12 +1788,13 @@ def make_river_map(
                 valid_thalwegs[i] = False
                 continue
 
-            # set water level at each point along the thalweg, based on observation, simulation, estimation, etc.
+            # set water level at each thalweg point (thalweg_eta), based on observation, simulation, estimation, etc.
             if ikeep_thalweg[i] == 1 or elev_scale < 0:
-                # keep = 1 is reserved for NHD, where tifs are dummy with 0 (land) and -1 (water)
-                # barrier islands (when elev_scale<0) are always nearshore, where 0.0 is a good approximation
-                thalweg_eta = 0.0 * elevs  # set uniform water level at 0.0, same as land level
-            else:  # normal case, more sophisticated methods for water level approximation
+                # thalweg_eta will be set to 0 for the following cases:
+                # 1) keep = 1 is reserved for NHD, where tifs are dummy with 0 (land) and -1 (water)
+                # 2) barrier islands (elev_scale < 0) are always nearshore, where 0.0 is a good approximation
+                thalweg_eta = 0.0 * elevs
+            else:  # normal case, more sophisticated estimation for water level along thalwegs
                 thalweg_eta = set_eta_thalweg(thalweg[:, 0], thalweg[:, 1], elevs)
 
             x_banks_left, y_banks_left, x_banks_right, y_banks_right, _, width, bank_search_status = get_two_banks(
@@ -1818,11 +1847,14 @@ def make_river_map(
     if dry_run_only:
         return
 
-    # End Dry run: found valid river segments; record approximate channel width
+    # End of Dry run, the following information should have been gathered by this point:
+    # 1) valid river segments (subject to further screening in the wet run)
+    # 2) approximate channel width
 
     # -------------------------------------------------------------
     # ------------------------- Wet run ---------------------------
     # -------------------------------------------------------------
+    logger.info('\n%s  ------------------------- Wet run ------------------------- \n', mpi_print_prefix)
     # initialize some lists and arrays
     bank_arcs = np.empty((len(thalwegs), 2), dtype=object)  # left bank and right bank for each thalweg
     # bank_arcs_raw = np.empty((len(thalwegs), 2), dtype=object)
@@ -2161,11 +2193,13 @@ def make_river_map(
                         elevs = np.zeros(line.shape[0])
                     if elevs is None:
                         raise ValueError(
-                            f"{mpi_print_prefix} error: some elevs not found on river arc {i}, {k} ..."
+                            f"{mpi_print_prefix} error: some elevs not found on river arc {i}, {k}: "
+                            f"{cpp2lonlat(line[:, 0], line[:, 1])}\n"
                         )
-
-                    river_arcs_z[i, k] = SMS_ARC(
-                        points=np.c_[line[:, 0], line[:, 1], elevs], src_prj='cpp', proj_z=False)
+                        # river_arcs_z[i, k] = None
+                    else:
+                        river_arcs_z[i, k] = SMS_ARC(
+                            points=np.c_[line[:, 0], line[:, 1], elevs], src_prj='cpp', proj_z=False)
 
                     # save extra information in the z field
                     # at most 6 pieces of info are allowed to be saved
@@ -2205,14 +2239,15 @@ def make_river_map(
     # end loop i, enumerating each thalweg
 
     # -----------------------------------diagnostic outputs ----------------------------
-    if i_DiagnosticOutput:
-        if any(river_arcs.flatten()):  # not all arcs are None
+    if any(river_arcs.flatten()):  # not all arcs are None
+        # important diagnostic outputs are always generated
+        SMS_MAP(arcs=river_arcs_extra.reshape((-1, 1))).writer(
+            filename=f'{output_dir}/{output_prefix}river_arcs_extra.map')
+        if i_DiagnosticOutput:  # other diagnostic outputs
             SMS_MAP(arcs=river_arcs.reshape((-1, 1))).writer(
                 filename=f'{output_dir}/{output_prefix}river_arcs.map')
             SMS_MAP(arcs=river_arcs_z.reshape((-1, 1))).writer(
                 filename=f'{output_dir}/{output_prefix}river_arcs_z.map')
-            SMS_MAP(arcs=river_arcs_extra.reshape((-1, 1))).writer(
-                filename=f'{output_dir}/{output_prefix}river_arcs_extra.map')
             SMS_MAP(arcs=inner_arcs.reshape((-1, 1))).writer(
                 filename=f'{output_dir}/{output_prefix}inner_arcs.map')
             SMS_MAP(arcs=bank_arcs.reshape((-1, 1))).writer(
@@ -2231,15 +2266,15 @@ def make_river_map(
                     filename=f'{output_dir}/{output_prefix}redist_thalweg_after_correction.map')
                 SMS_MAP(arcs=corrected_thalwegs).writer(
                     filename=f'{output_dir}/{output_prefix}corrected_thalweg.map')
-        else:
-            logger.info('%s No arcs found, aborted writing to *.map', mpi_print_prefix)
+    else:
+        logger.info('%s No arcs found, aborted writing to *.map', mpi_print_prefix)
 
     del smoothed_thalwegs[:], redistributed_thalwegs_pre_correction[:]
     del redistributed_thalwegs_after_correction[:], corrected_thalwegs[:]
 
     # ------------------------- Clean up and finalize ---------------------------
-    # assemble arcs groups for cleaning, use river arcs with cross-channel resolution as a base of cleaning threshold
-    # river arcs are always included
+    # assemble arcs groups for cleaning,
+    # use river arcs with cross-channel resolution as a base of cleaning threshold
     arc_groups = [arc for river in river_arcs for arc in river if arc is not None]
     if i_close_poly:  # one cc (cross-channel) arc at each end of each river
         arc_groups += [arc for river in cc_arcs for arc in river if arc is not None]

@@ -107,3 +107,79 @@ def z_decoder(z):
         decoded_arrays.append(np.array([int(decimal_part_str[j:j+2]) for j in range(0, len(decimal_part_str), 2)]))
 
     return decoded_arrays
+
+
+def reproject_tif(tif_file, output_file, dst_crs='epsg:4326'):
+    """
+    Reproject a GeoTIFF file to a specified coordinate reference system (CRS).
+
+    Parameters:
+    tif_file (str): Path to the input GeoTIFF file.
+    out_file (str): Path to the output reprojected GeoTIFF file.
+    crs (str): The target coordinate reference system (CRS) in WKT format or EPSG code.
+
+    Returns:
+    None
+    """
+    import rasterio
+    from rasterio.warp import calculate_default_transform, reproject, Resampling
+    
+    with rasterio.open(tif_file) as src:
+        transform, width, height = calculate_default_transform(
+            src.crs, dst_crs, src.width, src.height, *src.bounds)
+        
+        kwargs = src.meta.copy()
+        kwargs.update({
+            'crs': dst_crs,
+            'transform': transform,
+            'width': width,
+            'height': height
+        })
+
+        with rasterio.open(output_file, 'w', **kwargs) as dst:
+            for i in range(1, src.count + 1):
+                reproject(
+                    source=rasterio.band(src, i),
+                    destination=rasterio.band(dst, i),
+                    src_transform=src.transform,
+                    src_crs=src.crs,
+                    dst_transform=transform,
+                    dst_crs=dst_crs,
+                    resampling=Resampling.nearest
+                )
+
+
+def reproject_shpfile(shp_file, output_file, dst_crs='epsg:4326'):
+    """
+    Reproject a shapefile to a specified coordinate reference system (CRS).
+
+    Parameters:
+    shp_file (str): Path to the input shapefile.
+    output_file (str): Path to the output reprojected shapefile.
+    dst_crs (str): The target coordinate reference system (CRS) in WKT format or EPSG code.
+
+    Returns:
+    None
+    """
+    import geopandas as gpd
+
+    gdf = gpd.read_file(shp_file)
+    gdf.to_crs(dst_crs).to_file(output_file)
+
+
+if __name__ == '__main__':
+    # Example usage
+    # z = np.array([1.23, 2.34, 3.45])
+    # decoded = z_decoder(z)
+    # print(decoded)
+
+    # Example usage of reproject_*
+    reproject_shpfile(
+        '/sciclone/home/feiye/Hgrid_projects/mattwig_rivmap_ontario/sodus_rivmap_1e5.shp',
+        '/sciclone/home/feiye/Hgrid_projects/mattwig_rivmap_ontario/sodus_rivmap_1e5.ll.shp', dst_crs='epsg:4326')
+    
+    reproject_tif(
+        '/sciclone/home/feiye/Hgrid_projects/mattwig_rivmap_ontario/sodus_rivmap.tif',
+        '/sciclone/home/feiye/Hgrid_projects/mattwig_rivmap_ontario/sodus_rivmap.ll.tif', dst_crs='epsg:4326')
+
+    print('Done')
