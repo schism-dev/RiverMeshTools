@@ -1334,11 +1334,15 @@ def output_ocsmesh(
 
     # write extra information to file
     logger.info('Writing extra river arc information to file ...')
-    extra_info_map = glob(f'{output_dir}/*river_arcs_extra.map')
-    if len(extra_info_map) != 1:
-        raise ValueError('There should be exactly one extra info map file.')
-    write_river_shape_extra(
-        SMS_MAP(extra_info_map[0]), f'{output_dir}/total_river_arcs_extra.shp')
+    if os.path.exists(f'{output_dir}/river_arcs_extra.map'):
+        extra_info_map = SMS_MAP(f'{output_dir}/river_arcs_extra.map')
+    elif os.path.exists(f'{output_dir}/total_river_arcs_extra.map'):
+        extra_info_map = SMS_MAP(f'{output_dir}/total_river_arcs_extra.map')
+    else:
+        raise FileNotFoundError(
+            f'Cannot find river_arcs_extra.map or total_river_arcs_extra.map in {output_dir}'
+        )
+    write_river_shape_extra(extra_info_map, f'{output_dir}/total_river_arcs_extra.shp')
 
     logger.info('Preparing OCSMesh products took: %s seconds.', time.time()-time_ocsmesh_start)
 
