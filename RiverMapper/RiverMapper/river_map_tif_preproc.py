@@ -470,7 +470,7 @@ def find_thalweg_tile(
     return thalweg2large_group, large_groups_files, np.array(large_group2thalwegs, dtype=object)
 
 
-def test(input_shp_fname):
+def sample_rasterize_polygons(input_shp_fname):
     '''
     Make a splitter shapefile for splitting a large raster/vector shapefile into smaller tiles.
     Then split the large shapefile into smaller tiles.
@@ -491,4 +491,4 @@ def test(input_shp_fname):
 
 if __name__ == '__main__':
     SHP_FNAME = Path('/sciclone/schism10/Hgrid_projects/STOFS3D-v8/v46/Shapefiles/nhd_area_clipped.shp')
-    test(SHP_FNAME)
+    sample_rasterize_polygons(SHP_FNAME)

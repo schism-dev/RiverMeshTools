@@ -5,7 +5,10 @@ This script provides utility methods used by RiverMapper
 import os
 import shutil
 from pathlib import Path
+
 import numpy as np
+import geopandas as gpd
+
 
 
 # The equirectangular projection, a simple map projection that maps (lat, lon) to (x, y) coordinates.
@@ -123,11 +126,11 @@ def reproject_tif(tif_file, output_file, dst_crs='epsg:4326'):
     """
     import rasterio
     from rasterio.warp import calculate_default_transform, reproject, Resampling
-    
+
     with rasterio.open(tif_file) as src:
         transform, width, height = calculate_default_transform(
             src.crs, dst_crs, src.width, src.height, *src.bounds)
-        
+
         kwargs = src.meta.copy()
         kwargs.update({
             'crs': dst_crs,
@@ -161,7 +164,6 @@ def reproject_shpfile(shp_file, output_file, dst_crs='epsg:4326'):
     Returns:
     None
     """
-    import geopandas as gpd
 
     gdf = gpd.read_file(shp_file)
     gdf.to_crs(dst_crs).to_file(output_file)
@@ -177,7 +179,7 @@ if __name__ == '__main__':
     reproject_shpfile(
         '/sciclone/home/feiye/Hgrid_projects/mattwig_rivmap_ontario/sodus_rivmap_1e5.shp',
         '/sciclone/home/feiye/Hgrid_projects/mattwig_rivmap_ontario/sodus_rivmap_1e5.ll.shp', dst_crs='epsg:4326')
-    
+
     reproject_tif(
         '/sciclone/home/feiye/Hgrid_projects/mattwig_rivmap_ontario/sodus_rivmap.tif',
         '/sciclone/home/feiye/Hgrid_projects/mattwig_rivmap_ontario/sodus_rivmap.ll.tif', dst_crs='epsg:4326')

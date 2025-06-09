@@ -1,19 +1,12 @@
 '''
-This script helps ensure a minimum depth in rivers.
-The depth is measured from the higher bank elevation to any point in the river.
-If the depth is less than the specified minimum depth, the point is dredged to
-satisfy the minimum depth requirement.
+A class to handle river data.
 '''
 
 import numpy as np
-from copy import deepcopy
 from sklearn.neighbors import KDTree
 import geopandas as gpd
-
 from RiverMapper.SMS import SMS_MAP
-from RiverMapper.util import z_decoder
-from pylib import read as read_schism_hgrid  # pip install pylibs-ocean
-from pylib_experimental.schism_file import cread_schism_hgrid as read_schism_hgrid
+
 
 class Rivers():
     '''
@@ -143,7 +136,8 @@ class Rivers():
         self.idx = idx
 
     def dredge_inner_arcs(
-        self, min_channel_depth=1, region_gdf=None, diag_output_dir=None
+        self, min_channel_depth=1, region_gdf=None, diag_output_dir=None,
+        inner_most_dredge=True,
     ) -> np.ndarray:
         '''
         Dredge the inner longitudinal transects based on the difference between
@@ -155,9 +149,11 @@ class Rivers():
              measured from the higher bank
         :param region_gdf: gpd.GeoDataFrame, region of interest
         :param diag_output_dir: str, directory to save diagnostic files
+        :param inner_most_dredge: bool dredge only the two inner most arcs
 
         :return: dredged_points: np.ndarray, shape=(n_points, 3),
             x, y, z coordinates of dredged points
+        
         '''
         if self.rivers_coor is None:
             self.get_rivers_coor()
@@ -167,15 +163,33 @@ class Rivers():
         dredged_points = np.zeros((0, 3), dtype=float)
         for k, arcs_id in enumerate(self.riverarcs_grouping):
             if any(self.idx[arcs_id]):
-                # inside the watershed, i.e., where river arc points coorespond to mesh nodes
+                # inside the watershed, i.e., where most river arc points coorespond to mesh nodes
 
                 # Measure target dp from the higher bank's dp.
                 # rivers_coor: Left bank and right bank; along-river index; z of xyz
                 bank_dp = np.min(self.rivers_coor[k][[0, -1], :, 2], axis=0)
                 target_thalweg_dp = bank_dp + min_channel_depth  # target thalweg dp, positive downward
 
-                # dredge the inner transects; todo: consider the outer arcs
-                self.rivers_coor[k][1:-1, :, 2] = np.maximum(self.rivers_coor[k][1:-1, :, 2], target_thalweg_dp)
+                # dredge the inner transects
+                if inner_most_dredge:  # to be tested
+                    raise NotImplementedError('inner_most_dredge is not tested yet')
+                    if len(self.rivers_coor[k]) % 2 == 0:
+                        inner_arc_idx = [
+                            len(self.rivers_coor[k]) // 2 - 1,
+                            len(self.rivers_coor[k]) // 2
+                        ]
+                    else:
+                        inner_arc_idx = [
+                            len(self.rivers_coor[k]) // 2 - 1,
+                            len(self.rivers_coor[k]) // 2,
+                            len(self.rivers_coor[k]) // 2 + 1
+                        ]
+                    self.rivers_coor[k][inner_arc_idx, :, 2] = np.maximum(
+                        self.rivers_coor[k][inner_arc_idx, :, 2], target_thalweg_dp)
+                else:  # dredge all inner arcs, i.e., [1:-1]; caution when outer arcs (not bank arcs) are present
+                    self.rivers_coor[k][1:-1, :, 2] = np.maximum(
+                        self.rivers_coor[k][1:-1, :, 2], target_thalweg_dp)
+
                 dredged_points = np.r_[dredged_points, self.rivers_coor[k][1:-1, :, :].reshape(-1, 3)]
 
         dredged_points_gdf = gpd.GeoDataFrame(
@@ -185,7 +199,7 @@ class Rivers():
         dredged_points_gdf['z'] = dredged_points[:, 2]
 
         if region_gdf is not None:  # clip the dredged points to the watershed
-            idx = gpd.sjoin(
+            idx = gpd.sjoin(  # may be redundant, but just to be safe
                 dredged_points_gdf.to_crs(region_gdf.crs), region_gdf, how='inner', predicate='intersects'
             ).index
             dredged_points = dredged_points[idx, :]
@@ -258,77 +272,3 @@ class Rivers():
 # -------------------------------------------------------------------------------------
 # ------------------------------end class definition-----------------------------------
 # -------------------------------------------------------------------------------------
-
-
-def dredge_river_transects(
-    rivers: Rivers,
-    region_gdf: gpd.GeoDataFrame = None,
-    hgrid_obj=None,  # schism_hgrid object read by the read() function in pylib
-    min_channel_depth=1.0,
-    output_dir='./'
-):
-    '''
-    Dredge the inner arcs of each river transect to maintain a minimum elevation drop
-    from bank to thalweg, thus maintaining channel connectivity
-
-    Inputs:
-    - rivers: Rivers object from reading the RiverMapper diagnostic output file
-    - region_gdf: gpd.GeoDataFrame, region of interest, in which the dredging is performed.
-        It must be in the same coordinate system as the mesh.
-    - hgrid_obj: schism_hgrid object, mesh object
-    - min_channel_depth: float, minimum channel depth to dredge.
-        The depth is measured from the higher bank elevation to an inner arc node.
-    - output_dir: str, directory to save the dredged mesh and diagnostic files
-    '''
-
-    # get the river arcs' z values from the mesh
-    rivers.mesh_dp2riverarc_z(hgrid_obj)
-
-    # find the inner arcs and dredge within the watershed
-    dredged_points = rivers.dredge_inner_arcs(
-        region_gdf=region_gdf, min_channel_depth=min_channel_depth)
-
-    # map dredged points to mesh nodes
-    _, idx = KDTree(np.c_[hgrid_obj.x, hgrid_obj.y]).query(dredged_points[:, :2])
-    # update the mesh
-    hgrid_dredged = deepcopy(hgrid_obj)
-    hgrid_dredged.dp[np.squeeze(idx)] = np.maximum(
-        hgrid_dredged.dp[np.squeeze(idx)], dredged_points[:, 2]
-    )
-
-    # output
-    hgrid_dredged.grd2sms(output_dir + '/hgrid_dredged.2dm')  # SMS format
-    hgrid_dredged.save(output_dir + '/hgrid_dredged.gr3', fmt=1)  # SCHISM format
-
-
-def sample_usage_dredge_river_transects():
-    '''
-    Sample usage of dredge_river_transects()
-    '''
-    # Load extra information from the river arcs
-    # You should have this file under the RiverMapper output directory;
-    # if not, configure RiverMapper to output this file by setting i_DiagnosticOutput
-    rivers = Rivers(SMS_MAP(
-        '/sciclone/schism10/Hgrid_projects/STOFS3D-v7/v19_RiverMapper/Outputs/'
-        'bora_v19.1.v19_ie_v18_3_nwm_clipped_in_cudem_missing_tiles_20-core/'
-        'total_river_arcs_extra.map'
-    ))
-    # Define region of interest
-    region_gdf = gpd.read_file(
-        '/sciclone/schism10/feiye/STOFS3D-v8/I15_v7/Bathy_edit/RiverArc_Dredge/watershed_ME.shp'
-    )
-    # schism mesh object with bathymetry
-    hgrid_obj = read_schism_hgrid(
-        '/sciclone/schism10/feiye/STOFS3D-v8/I15a_v7/Bathy_edit/RiverArc_Dredge/hgrid.ll')
-
-    output_dir = '/sciclone/schism10/feiye/STOFS3D-v8/I15a_v7/Bathy_edit/RiverArc_Dredge/'
-
-    # Dredge the river transects
-    dredge_river_transects(
-        rivers, region_gdf, hgrid_obj,
-        min_channel_depth=1.0, output_dir=output_dir
-    )
-
-
-if __name__ == '__main__':
-    sample_usage_dredge_river_transects()

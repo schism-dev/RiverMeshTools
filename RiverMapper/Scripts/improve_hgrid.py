@@ -26,7 +26,6 @@ else:
 import shutil
 import os
 import numpy as np
-from RiverMapper import improve_hgrid as original_file
 from RiverMapper.Hgrid_extended import find_nearest_nd, hgrid_basic, get_inp, propogate_nd, compute_ie_area
 from RiverMapper.SMS import SMS_MAP
 import pathlib
@@ -434,7 +433,7 @@ def grid_element_relax(gd, target_points=None, niter=3, ntier=0, max_dist=50, mi
     gd.write_hgrid(f'{wdir}/fixed.gr3', value=ifixed, fmt=0)
 
     # springing
-    script_dir =  os.path.dirname(original_file.__file__)
+    script_dir =  os.path.dirname(__file__)
     print(f'running grid_spring with {niter} iteration(s)...')
     p = subprocess.Popen(f'{script_dir}/grid_spring', cwd=wdir, stdout=subprocess.PIPE, stdin=subprocess.PIPE)
     p.stdin.write(f'{niter}\n{min_area_allowed}\n'.encode()) #expects a bytes type object
@@ -685,7 +684,12 @@ def improve_hgrid(gd, prj='esri:102008', skewness_threshold=35, area_threshold=1
     pass
 
 
-def test():
+def sample1():
+    '''
+    Sample usage 1 without command line interface.
+    The input grid is in *.ll format and lon/lat
+    '''
+    
     grid_dir = '/sciclone/schism10/feiye/STOFS3D-v8/R15e_v7/'
     grid_file = f'{grid_dir}/hgrid_xy_transferred.ll'
 
@@ -711,7 +715,11 @@ def test():
     improve_hgrid(gd_meter, n_intersection_fix=0, area_threshold=area_threshold, skewness_threshold=skewness_threshold, nmax=4)
 
 
-def test2():
+def sample2():
+    '''
+    Sample usage 2 without command line interface
+    The input grid is in *.2dm format and esri:102008 projection
+    '''
     grid_dir = '/sciclone/schism10/Hgrid_projects/STOFS3D-v8/v31/Improve/'
     grid_file = f'{grid_dir}/v31.2dm'
 
@@ -755,5 +763,5 @@ def main():
 
 
 if __name__ == "__main__":
-    # test()
-    main()
+    sample2()
+    # main()

@@ -1318,8 +1318,9 @@ def output_ocsmesh(
                 original_area = poly['geometry'].area
 
                 # Check if a big portion of the original area is within the river polygon
-                if intersection_area / original_area > area_thres:
-                    poly_idx.append(poly.name)
+                if original_area > 0:  # Occasionally, original_area can be zero
+                    if intersection_area / original_area > area_thres:
+                        poly_idx.append(poly.name)
 
             except shapely.errors.GEOSException as e:
                 err_msg = f"GEOSException during intersection calculation: {e}"
