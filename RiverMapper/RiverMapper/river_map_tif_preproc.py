@@ -470,13 +470,54 @@ def find_thalweg_tile(
     return thalweg2large_group, large_groups_files, np.array(large_group2thalwegs, dtype=object)
 
 
-def sample_rasterize_polygons(input_shp_fname):
+def create_dummy_tif(output_path, bounds, pixel_size=1.0, value=0, dtype='uint8'):
+    """
+    Create a dummy GeoTIFF with constant value over a defined bounding box.
+
+    Parameters:
+        output_path (str): Path to save the GeoTIFF.
+        bounds (tuple): Bounding box in (min_lon, min_lat, max_lon, max_lat).
+        pixel_size (float): Resolution in degrees per pixel (default 1.0).
+        value (int or float): Constant value to fill (default 0).
+        dtype (str): Data type of the raster values (default 'uint8').
+
+    Returns:
+        str: Path to the created GeoTIFF.
+    """
+    min_lon, min_lat, max_lon, max_lat = bounds
+
+    width = int(np.ceil((max_lon - min_lon) / pixel_size))
+    height = int(np.ceil((max_lat - min_lat) / pixel_size))
+
+    transform = from_origin(min_lon, max_lat, pixel_size, pixel_size)
+
+    data = np.full((height, width), value, dtype=dtype)
+
+    meta = {
+        'driver': 'GTiff',
+        'height': height,
+        'width': width,
+        'count': 1,
+        'dtype': dtype,
+        'crs': 'EPSG:4326',
+        'transform': transform
+    }
+
+    os.makedirs(os.path.dirname(output_path), exist_ok=True)
+    with rasterio.open(output_path, 'w', **meta) as dst:
+        dst.write(data, 1)
+
+    return output_path
+
+
+def sample_rasterize_polygons(input_shp_fname, outdir=None):
     '''
     Make a splitter shapefile for splitting a large raster/vector shapefile into smaller tiles.
     Then split the large shapefile into smaller tiles.
     Finally, rasterize the smaller shapefiles into tif files.
     '''
-    outdir = Path(f'{input_shp_fname.parent}/{input_shp_fname.stem}_split/')
+    if outdir is None:
+        outdir = Path(f'{input_shp_fname.parent}/{input_shp_fname.stem}_split_rasterized/')
     outdir.mkdir(parents=True, exist_ok=True)
 
     dem_box = gpd.read_file(input_shp_fname).total_bounds
@@ -490,5 +531,15 @@ def sample_rasterize_polygons(input_shp_fname):
 
 
 if __name__ == '__main__':
-    SHP_FNAME = Path('/sciclone/schism10/Hgrid_projects/STOFS3D-v8/v46/Shapefiles/nhd_area_clipped.shp')
+    '''
+    Pre-process a shapfiles of polygons (e.g., NHD area polygons) by splitting it into smaller tiles,
+    and rasterizing the tiles into tif files.
+    The output tif files can be used as input for RiverMapper.
+    '''
+    SHP_FNAME = Path('/sciclone/schism10/Hgrid_projects/Waccamaw2/Shapefiles/nhdarea_waccamaw.shp')
     sample_rasterize_polygons(SHP_FNAME)
+
+    output_dir = Path(f'{SHP_FNAME.parent}/{SHP_FNAME.stem}_dummy/')
+    create_dummy_tif(f"{output_dir}/global_dummy.tif", bounds=(-180, -90, 180, 90), pixel_size=1.0, value=0, dtype='uint8')
+
+    print('Done.')

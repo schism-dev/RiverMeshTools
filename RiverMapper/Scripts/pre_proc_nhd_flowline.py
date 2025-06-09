@@ -2,7 +2,9 @@
 Preprocess NHD flowline shapefile for use in RiverMapper
 """
 
+import os
 from pathlib import Path
+import pandas as pd
 import geopandas as gpd
 from shapely.geometry import LineString, MultiLineString
 from shapely.ops import linemerge, split
@@ -61,6 +63,13 @@ def split_nhdflowline(gdf, max_segment_length=15):
     Function to split NHD flowlines into shorter segments based on a maximum length.
     This is useful for ensuring that the flowlines are not too long for processing
     in RiverMapper.
+
+    Inputs:
+    - gdf: GeoDataFrame containing NHD flowlines
+    - max_segment_length: Maximum length of each segment in kilometers
+
+    Outputs:
+    - new_gdf: GeoDataFrame with flowlines split into shorter segments
     '''
     new_geometries = []
     for index, row in gdf.iterrows():
@@ -159,61 +168,70 @@ def densify_linestring(line, max_segment_length):
 
 def pre_process_nhdflowlines(
     input_flowline=None, input_nhdarea=None,
-    max_segment_length=15, along_segment_resolution=20
+    line_identifier="gnis_id",
+    max_segment_length=15, along_segment_resolution=20,
+    output_dir=None, diag_output=False
 ):
     '''
     Main function to pre-process NHD flowlines.
-    The precedures are labeled as (1) to (5) below:
+    The precedures are labeled as (1) to (6) below:
+
+    Inputs:
+    - input_flowline: Path to the NHD flowline shapefile
+    - input_nhdarea: Path to the NHD area shapefile
+    - line_identifier: The identifier for selecting lines, e.g., "gnis_id"
+    - max_segment_length: Maximum length of each segment in kilometers
+    - along_segment_resolution: Resolution for densifying the lines in meters
+    - diag_output: If True, outputs diagnostic shapefiles for each step
+    
+    Outputs:
+    - A new shapefile with pre-processed NHD flowlines saved in the output directory.
+    - Other diagnostic shapefiles if diag_output is True under output directory.
     '''
-    line_identifier = "gnis_id"  # The identifier for the lines
     # Load the shapefiles
     lines = gpd.read_file(input_flowline)
     polygons = gpd.read_file(input_nhdarea)
 
+    if output_dir is None:
+        output_dir = f"{input_flowline.parent}/{input_flowline.stem}_processed/"
+        os.makedirs(output_dir, exist_ok=True)
+
     # 1) Subset lines based on certain criteria (in this example valid line_identifer),
     #    because NHD flowlines can be too dense for the purpose of compound flood modeling
-    print(f'subsetting lines based on {line_identifier}')
-    lines = lines[lines[line_identifier].notnull() & (lines[line_identifier] != "")]
+    if line_identifier is not None:
+        print(f'subsetting lines based on {line_identifier}')
+        lines = lines[lines[line_identifier].notnull() & (lines[line_identifier] != "")]
 
-    # 2) Dissolve lines with the same line_identifier, otherwise one river can be broken
+    # 2) Dissolve lines with the same name (gnis_id), otherwise one river can be broken
     #    into too many segments due to intersection with tributaries. Most tributaries
     #    are negligible and discarded in Step 1)
-    print('dissolving lines with the same line_identifier')
-    lines = lines.dissolve(by=line_identifier, as_index=False)
+    print('dissolving lines with the same gnis_id')
+    lines = lines.dissolve(by='gnis_id', as_index=False)
     lines = merge_lines(lines)
-    lines.to_file(input_flowline.with_name(input_flowline.stem + "_merged.shp"))
+    if diag_output:
+        lines.to_file(input_flowline.with_name(input_flowline.stem + "_merged.shp"))
 
     # 3) Group lines by inside and outside of NHDArea polygons. If a line intersects
     #    with a polygon, it is split into segments. This is important for RiverMapper
     #    to correctly identify the river arcs. The lines outside of the polygons
     #    are expanded into pseudo river arcs in RiverMapper.
-    qgis_like = True  # Same method as in QGIS, i.e., lines are split by polygons
-    if qgis_like:
-        inside_lines = gpd.clip(lines, polygons, keep_geom_type=False)
-        inside_lines = inside_lines.explode(index_parts=False).reset_index(drop=True)
-        outside_lines = gpd.overlay(lines, polygons, how='difference')
-        outside_lines = outside_lines.explode(index_parts=False).reset_index(drop=True)
+    inside_lines = gpd.clip(lines, polygons, keep_geom_type=False)
+    inside_lines = inside_lines.explode(index_parts=False).reset_index(drop=True)
+
+    outside_lines = gpd.overlay(lines, polygons, how='difference')
+    outside_lines = outside_lines.explode(index_parts=False).reset_index(drop=True)
+
+    # only retain linestrings (sometimes points may occur after clipping and exploding)
+    inside_lines = inside_lines[inside_lines.geometry.type == 'LineString']
+    outside_lines = outside_lines[outside_lines.geometry.type == 'LineString']
+
+    if diag_output:
         inside_lines.to_file(input_flowline.with_name(input_flowline.stem + "_inside.shp"))
         outside_lines.to_file(input_flowline.with_name(input_flowline.stem + "_outside.shp"))
-        lines = gpd.GeoDataFrame(geometry=inside_lines.geometry.append(outside_lines.geometry), crs=lines.crs)
+
+    lines = pd.concat([inside_lines, outside_lines], ignore_index=True)
+    if diag_output:
         lines.to_file(input_flowline.with_name(input_flowline.stem + "_inside_outside.shp"))
-    else:
-        print('grouping/splitting lines by inside/outside polygons')
-        with Pool(cpu_count()) as pool:
-            results = pool.starmap(
-                group_line_by_polygons,
-                [(line_row, polygons) for _, line_row in lines.iterrows()]
-            )
-        lines_inside = [seg for result in results for seg in result[0]]
-        gpd.GeoDataFrame(geometry=lines_inside, crs=lines.crs).to_file(
-            input_flowline.with_name(input_flowline.stem + "_inside.shp"))
-        lines_outside = [seg for result in results for seg in result[1]]
-        gpd.GeoDataFrame(geometry=lines_outside, crs=lines.crs).to_file(
-            input_flowline.with_name(input_flowline.stem + "_outside.shp"))
-        lines = gpd.GeoDataFrame(geometry=lines_inside+lines_outside, crs=lines.crs)
-        lines.to_file(
-            input_flowline.with_name(input_flowline.stem + "_inside_outside.shp"),
-        )
 
     # 4) Split long lines into shorter segments. A long river can change morphology
     #    (e.g., width, sinuosity) along its length, and RiverMapper will perform better
@@ -240,7 +258,7 @@ def pre_process_nhdflowlines(
     lines['keep'] = 1
 
     # Save the result to a new shapefile
-    lines.to_file(input_flowline.with_name(input_flowline.stem + f"_split{max_segment_length}.shp"))
+    lines.to_file(input_flowline.with_name(input_flowline.stem + f"_processed.shp"))
 
 
 def sample_densify(shpfname, max_segment_length=20):
@@ -257,15 +275,25 @@ def sample_densify(shpfname, max_segment_length=20):
             print(f"Skipping non-LineString geometry at index {index}")
 
     new_gdf = gpd.GeoDataFrame(geometry=new_geometries, crs=gdf.crs)
-    output_file = Path(shpfname).with_name(f"{Path(shpfname).stem}_densified_{max_segment_length}.shp")
+    output_file = Path(shpfname).with_name(f"{Path(shpfname).stem}_processed_{max_segment_length}.shp")
     new_gdf.to_file(output_file)
     return new_gdf
 
 
 if __name__ == "__main__":
-    # sample_densify("/sciclone/schism10/Hgrid_projects/Waccamaw/Shapefiles/a50p4_waccamaw.shp")
+    '''
+    Example usage of the pre_process_nhdflowlines function.
+    This will preprocess the NHD flowline shapefile and save the result to a new shapefile.
+
+    It is recommended to clip the NHD flowline and NHD area to the area of interest
+    before running this function to avoid processing too many lines.
+    '''
     pre_process_nhdflowlines(
-        input_flowline=Path("/sciclone/schism10/Hgrid_projects/Waccamaw/Shapefiles/nhdflowline_sc.shp"),
-        input_nhdarea=Path("/sciclone/schism10/Hgrid_projects/Waccamaw/Shapefiles/nhd_area_clipped.shp"),
+        input_flowline=Path("/sciclone/schism10/Hgrid_projects/Wilmington/Shapefiles/nhdflowline_wilmington.shp"),
+        input_nhdarea=Path("/sciclone/schism10/Hgrid_projects/Wilmington/Shapefiles/nhdarea_wilmington.shp"),
+        line_identifier='gnis_id',  # use gnis_id to select lines
+        max_segment_length=15,  # split segments with a maximum segment length in kilometers
+        along_segment_resolution=20,  # densify segments with a resolution in meters, original points are retained
+        diag_output=True  # set to True to output diagnostic shapefiles
     )
     print('Done!')
