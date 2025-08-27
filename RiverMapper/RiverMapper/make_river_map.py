@@ -31,6 +31,7 @@ import pandas as pd
 from scipy import interpolate
 from scipy.stats import zscore
 from scipy.spatial import cKDTree, KDTree
+from scipy.ndimage import gaussian_filter1d
 import shapely
 from shapely.geometry import LineString, Point
 from shapely.ops import polygonize, unary_union
@@ -43,7 +44,7 @@ from sklearn.neighbors import NearestNeighbors
 from RiverMapper.config_logger import logger
 from RiverMapper.SMS import (
     SMS_ARC, SMS_MAP, curvature,
-    dl_lonlat2cpp, get_all_points_from_shp, get_perpendicular_angle,
+    dl_lonlat2cpp, get_all_points_from_shp,  # get_perpendicular_angle,
     lonlat2cpp, write_river_shape_extra
 )
 from RiverMapper.SMS import cpp2lonlat
@@ -140,6 +141,236 @@ class Geoms_XY():
 # ------------------------------------------------------------------
 # low level functions mainly for basic geometric processing
 # ------------------------------------------------------------------
+
+import numpy as np
+
+def get_perpendicular_angle(
+    line,
+    # --- despike (isolated wiggles) ---
+    hampel_win=5,            # odd window in points; 5 or 7 typical
+    hampel_k=3.0,            # MAD threshold
+    # --- short zig-zag (V/Λ) removal ---
+    L_spike_m=None,          # max arclength of a spike to flatten [m]; default = 3*median spacing
+    kappa_min=None,          # min |dθ/ds| to treat as a bend [1/m]; default ≈ 1/(2*R_keep)
+    R_keep=300.0,            # "real" bend radius you want to preserve [m] (used for defaults)
+    # --- curvature-aware smoothing ---
+    smooth_m=20.0,           # base Gaussian sigma in meters (0 disables)
+    kappa_thresh=None,       # curvature threshold to mark sustained bends [1/m]; default = 1/R_keep
+    constriction_run=6       # min consecutive vertices above kappa_thresh (protect from heavy smoothing)
+):
+    """
+    Right-hand perpendicular angle (radians) at each polyline vertex with
+    despiking + curvature-aware smoothing that preserves real constrictions.
+    Left-hand normal is angle + π.
+
+    Missed tiny spikes → increase L_spike_m (e.g., 4× ds_med) or lower kappa_min a bit.
+    Over-smoothing constrictions → reduce smooth_m, increase kappa_thresh, or increase constriction_run.
+    """
+    # ---------- helpers ----------
+    def _gauss1d(x, sigma_pts):
+        """Gaussian smoothing; falls back to moving average if scipy unavailable."""
+        if sigma_pts <= 0:
+            return x
+        try:
+            from scipy.ndimage import gaussian_filter1d
+            return gaussian_filter1d(x, sigma_pts, mode="nearest")
+        except Exception:
+            # fallback: moving average with window ~= 2.355*sigma (FWHM)
+            w = max(1, int(np.round(2.355 * sigma_pts)))
+            if w % 2 == 0:
+                w += 1
+            pad = w // 2
+            xpad = np.pad(x, (pad, pad), mode="edge")
+            ker = np.ones(w, dtype=float) / w
+            return np.convolve(xpad, ker, mode="valid")
+
+    def _hampel(theta, win, k):
+        if win % 2 == 0:
+            win += 1
+        half = win // 2
+        out = theta.copy()
+        N = theta.size
+        outlier = np.zeros(N, bool)
+        for i in range(N):
+            i0 = max(0, i - half); i1 = min(N, i + half + 1)
+            w = theta[i0:i1]
+            med = np.median(w)
+            mad = np.median(np.abs(w - med)) + 1e-12
+            if abs(theta[i] - med) > k * 1.4826 * mad:
+                outlier[i] = True
+        isolated = outlier & ~np.roll(outlier, 1) & ~np.roll(outlier, -1)
+        for i in np.where(isolated)[0]:
+            i0 = max(0, i - half); i1 = min(N, i + half + 1)
+            out[i] = np.median(out[i0:i1])
+        return out
+
+    def _despike_short_zigzags(theta, s, kmin, Lspike):
+        """Flatten short V/Λ wiggles by local linear interpolation."""
+        N = theta.size
+        if N < 3:
+            return theta.copy()
+        # κ = dθ/ds with robust guards
+        if N >= 3:
+            dthds = np.gradient(theta, s, edge_order=2)
+        else:
+            dthds = np.gradient(theta, s, edge_order=1)
+        signc = np.sign(dthds)
+        flips = np.where((signc[:-1] != 0) & (signc[1:] != 0) & (signc[:-1] != signc[1:]))[0]
+        out = theta.copy()
+        j = 0
+        while j < flips.size:
+            f = flips[j]
+            if (abs(dthds[f]) >= kmin) and (abs(dthds[f+1]) >= kmin):
+                left, right = f, f + 1
+                while left > 0 and right < N - 1:
+                    Lprop = s[right + 1] - s[left - 1]
+                    if Lprop > Lspike:
+                        break
+                    if np.sign(dthds[left - 1]) == np.sign(dthds[right]):
+                        break
+                    left -= 1; right += 1
+                if right - left >= 2:
+                    out[left+1:right] = np.interp(
+                        s[left+1:right], (s[left], s[right]), (out[left], out[right])
+                    )
+                while j < flips.size and flips[j] < right:
+                    j += 1
+                continue
+            j += 1
+        return out
+
+    # ---------- inputs ----------
+    xy = np.asarray(line, float)[:, :2]
+    N = len(xy)
+    if N == 0:
+        return np.array([], float)
+    if N == 1:
+        return np.array([0.0], float)  # arbitrary
+
+    # ---------- arclength & spacing (with guards) ----------
+    seg = np.diff(xy, axis=0)            # (N-1,2)
+    ds = np.hypot(seg[:, 0], seg[:, 1])  # (N-1,)
+    s = np.r_[0.0, np.cumsum(ds)]        # (N,)
+    # ensure strictly increasing s (guard repeated vertices)
+    if np.any(np.diff(s) <= 0):
+        s = s.copy()
+        for i in range(1, N):
+            if s[i] <= s[i-1]:
+                s[i] = s[i-1] + 1e-9
+    ds_pos = ds[ds > 0]
+    ds_med = np.median(ds_pos) if ds_pos.size > 0 else max(s[-1] / max(N-1, 1), 1.0)
+
+    # defaults tied to spacing/physics
+    if L_spike_m is None:
+        L_spike_m = 3.0 * ds_med
+    if kappa_min is None:
+        kappa_min = 1.0 / max(2.0 * R_keep, 1e-9)
+    if kappa_thresh is None:
+        kappa_thresh = 1.0 / max(R_keep, 1e-9)
+
+    # ---------- tangent angle θ at vertices ----------
+    th_seg = np.unwrap(np.arctan2(seg[:, 1], seg[:, 0]))  # (N-1,)
+    th = np.empty(N, float)
+    th[0] = th_seg[0]
+    th[-1] = th_seg[-1]
+    if N > 2:
+        th[1:-1] = 0.5 * (th_seg[:-1] + th_seg[1:])
+
+    # curvature proxy κ = |dθ/ds|
+    if N >= 3:
+        dth_ds = np.gradient(th, s, edge_order=2)
+    else:
+        dth_ds = np.gradient(th, s, edge_order=1)  # N==2
+    kappa = np.abs(dth_ds)
+
+    # ---------- Stage A: Hampel despike (isolated 1–2 pt outliers) ----------
+    thA = _hampel(th, hampel_win, hampel_k)
+
+    # ---------- Stage B: remove short V/Λ wiggles by arclength ----------
+    thB = _despike_short_zigzags(thA, s, kappa_min, L_spike_m)
+
+    # ---------- Stage C: curvature-aware smoothing of θ ----------
+    thC = thB.copy()
+    if smooth_m and smooth_m > 0 and s[-1] > 0:
+        # protect sustained high-curvature runs (likely real constrictions)
+        strong = (kappa >= kappa_thresh)
+        protect = np.zeros(N, bool)
+        i = 0
+        while i < N:
+            if strong[i]:
+                j = i
+                while j < N and strong[j]:
+                    j += 1
+                if (j - i) >= constriction_run:
+                    protect[i:j] = True
+                i = j
+            else:
+                i += 1
+
+        sigma_pts = max(smooth_m / max(ds_med, 1e-9), 0.0)
+        th_heavy = _gauss1d(thC, sigma_pts)
+        th_light = _gauss1d(thC, max(0.33 * sigma_pts, 0.0))
+        thC = np.where(protect, th_light, th_heavy)
+
+    # ---------- normals (right-hand) ----------
+    perp = thC - np.pi / 2.0
+    # wrap to [-π, π] for neatness
+    perp = (perp + np.pi) % (2.0 * np.pi) - np.pi
+    return perp
+
+
+def get_perpendicular_angle2(line):
+    """
+    Compute the right-hand perpendicular (normal) angle at each point of a polyline,
+    using tangent vectors (no angle unwrapping). Returns radians in [-pi, pi].
+
+    Parameters
+    ----------
+    line : (N, >=2) array-like
+        Polyline coordinates; only the first two columns (x, y) are used.
+
+    Returns
+    -------
+    perp : (N,) ndarray
+        Angle (radians) of the right-hand normal at each point.
+        The left-hand normal is perp + np.pi.
+    """
+    xy = np.asarray(line, dtype=float)[:, :2]
+    N = len(xy)
+    if N < 2:
+        return np.zeros((N,), dtype=float)
+
+    # Tangent estimate at each point via central differences (endpoints: one-sided)
+    t = np.gradient(xy, axis=0)
+    t_norm = np.hypot(t[:, 0], t[:, 1])
+
+    # If any zero-length tangents (repeated coords, etc.), fall back to segment diffs
+    zero = (t_norm == 0)
+    if np.any(zero):
+        td = np.vstack([xy[1] - xy[0], np.diff(xy, axis=0), xy[-1] - xy[-2]])
+        td_norm = np.hypot(td[:, 0], td[:, 1])
+        use = zero & (td_norm > 0)
+        t[use] = td[use]
+        t_norm = np.hypot(t[:, 0], t[:, 1])
+
+    # Final guard: replace any remaining zeros with a default unit x-tangent
+    zero = (t_norm == 0)
+    if np.any(zero):
+        t[zero] = np.array([1.0, 0.0])
+        t_norm[zero] = 1.0
+
+    # Normalize tangents
+    t /= t_norm[:, None]
+
+    # Right-hand normal: n = (-ty, tx)
+    n = np.column_stack((-t[:, 1], t[:, 0]))
+
+    # Convert to angle
+    perp = np.arctan2(n[:, 1], n[:, 0])  # atan2(y, x)
+
+    return perp
+
+
 def moving_average(a, n=10, self_weights=0):
     '''
     Calculate the moving average of a 1D numpy array
@@ -426,6 +657,48 @@ def smooth_bank(line, xs, ys, xs_other_side, ys_other_side, ang_diff_shres=np.pi
     perp = get_perpendicular_angle(line)
 
     return line, xs, ys, xs_other_side, ys_other_side, perp
+
+
+def nudge_both_banks(thalweg, xr, yr, xl, yl, desired_river_width_range=None, points_mask=None):
+    '''
+    Nudge banks in the perpendicular direction to the thalweg
+    so that the width of the channel is within a specified range
+
+    points_mask: boolean array, same length as xr, yr, xl, yl
+        if provided, only the points with True in points_mask will be nudged
+        if None, all points will be nudged
+    '''
+    if desired_river_width_range is None:
+        desired_river_width_range = np.array([35, 500])
+    if points_mask is None:
+        points_mask = np.ones((len(xr), ), dtype=bool)  # all points are valid
+    
+    line = np.c_[(xr + xl)/2, (yr + yl)/2]
+    perp_right = get_perpendicular_angle(line)
+    perp_left = perp_right + np.pi
+
+    ds = ((xr - xl)**2 + (yr -yl)**2)**0.5
+
+    # nudge both banks symmetrically
+    # widen the channel if too narrow
+    narrow_mask = ds < desired_river_width_range[0]
+    idx = np.logical_and(narrow_mask, points_mask)
+    nudge_dist = desired_river_width_range[0] / 2
+    xr[idx] = line[idx, 0] + nudge_dist * np.cos(perp_right[idx])
+    yr[idx] = line[idx, 1] + nudge_dist * np.sin(perp_right[idx])
+    xl[idx] = line[idx, 0] + nudge_dist * np.cos(perp_left[idx])
+    yl[idx] = line[idx, 1] + nudge_dist * np.sin(perp_left[idx])
+
+    # narrow the channel if too wide
+    wide_mask = ds > desired_river_width_range[1]
+    idx = np.logical_and(wide_mask, points_mask)
+    nudge_dist = desired_river_width_range[1] / 2
+    xr[idx] = line[idx, 0] + nudge_dist * np.cos(perp_right[idx])
+    yr[idx] = line[idx, 1] + nudge_dist * np.sin(perp_right[idx])
+    xl[idx] = line[idx, 0] + nudge_dist * np.cos(perp_left[idx])
+    yl[idx] = line[idx, 1] + nudge_dist * np.sin(perp_left[idx])
+
+    return xr, yr, xl, yl
 
 
 def nudge_bank(line, perp, xs, ys, dist=None):
@@ -1596,20 +1869,20 @@ def make_river_map(
     '''
 
     # ------------------------- other input parameters not exposed to users ---------------------------
-    nudge_ratio = np.array((0.3, 2.0))  # ratio between nudging distance to mean half-channel-width
+    nudge_ratio = np.array((0.1, 2.0))  # ratio between nudging distance to mean half-channel-width
     MapUnit2METER = 1.0  # ratio between actual map unit and meter; deprecated, just use lon/lat for any inputs
-    # ------------------------- end other inputs ---------------------------
-
-    # ----------------------   pre-process some inputs -------------------------
-    river_threshold = np.array(river_threshold) / MapUnit2METER
-    pseudo_channel_length_width_ratio = pseudo_channel_dl / (pseudo_channel_width / (nrow_pseudo_channel - 1))
 
     if i_pseudo_channel == 1:
         require_dem = False
         endpoints_scale = 1.0
     else:
         require_dem = True
-        endpoints_scale = 1.3  # slightly refine near the endpoints to improve connectivity
+        endpoints_scale = 1.0  # refine near the endpoints to improve connectivity
+    # ------------------------- end other inputs ---------------------------
+
+    # ----------------------   pre-process some inputs -------------------------
+    river_threshold = np.array(river_threshold) / MapUnit2METER
+    pseudo_channel_length_width_ratio = pseudo_channel_dl / (pseudo_channel_width / (nrow_pseudo_channel - 1))
 
     if custom_width2narcs is not None:
         if width2narcs_option != 'custom':
@@ -2085,10 +2358,22 @@ def make_river_map(
                     inner_arc_position = set_inner_arc_position(nrow_arcs=nrow_pseudo_channel, position_type='fake')
             else:  # normal case: touch-ups on the two banks
                 if i_nudge_banks:
-                    x_banks_left, y_banks_left = nudge_bank(
-                        thalweg, perp+np.pi, x_banks_left, y_banks_left, dist=nudge_ratio*0.5*np.mean(width))
-                    x_banks_right, y_banks_right = nudge_bank(
-                        thalweg, perp, x_banks_right, y_banks_right, dist=nudge_ratio*0.5*np.mean(width))
+                    # only nudge endpoints
+                    points_mask = np.zeros((len(x_banks_left), ), dtype=bool)
+                    # 5% of points on either side (clipped in [4, n_points])
+                    n_endpoints = min(max(4, int(0.05 * len(points_mask))), len(points_mask))
+                    points_mask[:n_endpoints] = True  # nudge near endpoints
+                    points_mask[-n_endpoints:] = True  # nudge near endpoints
+
+                    x_banks_right, y_banks_right, x_banks_left, y_banks_left = nudge_both_banks(
+                        thalweg, x_banks_right, y_banks_right, x_banks_left, y_banks_left,
+                        desired_river_width_range=nudge_ratio*np.mean(width), points_mask=None
+                    )  # using full channel width for nudging
+
+                    # x_banks_left, y_banks_left = nudge_bank(
+                    #     thalweg, perp+np.pi, x_banks_left, y_banks_left, dist=nudge_ratio*0.5*np.mean(width))
+                    # x_banks_right, y_banks_right = nudge_bank(
+                    #     thalweg, perp, x_banks_right, y_banks_right, dist=nudge_ratio*0.5*np.mean(width))
 
                 # smooth banks
                 if i_smooth_banks:

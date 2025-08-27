@@ -289,8 +289,8 @@ if __name__ == "__main__":
     before running this function to avoid processing too many lines.
     '''
     pre_process_nhdflowlines(
-        input_flowline=Path("/sciclone/schism10/Hgrid_projects/Wilmington/Shapefiles/nhdflowline_wilmington.shp"),
-        input_nhdarea=Path("/sciclone/schism10/Hgrid_projects/Wilmington/Shapefiles/nhdarea_wilmington.shp"),
+        input_flowline=Path("/sciclone/schism10/Hgrid_projects/STOFS3D-v8/a51_RiverMapper/Shapefiles/nhdflowline_la_ms.shp"),
+        input_nhdarea=Path("/sciclone/schism10/Hgrid_projects/STOFS3D-v8/a51_RiverMapper/Shapefiles/nhdarea_la_ms.shp"),
         line_identifier='gnis_id',  # use gnis_id to select lines
         max_segment_length=15,  # split segments with a maximum segment length in kilometers
         along_segment_resolution=20,  # densify segments with a resolution in meters, original points are retained
