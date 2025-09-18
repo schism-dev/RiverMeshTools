@@ -21,7 +21,6 @@ import math
 import os
 import sys
 import time
-from glob import glob
 from tqdm import tqdm
 
 # Related third-party imports
@@ -141,9 +140,6 @@ class Geoms_XY():
 # ------------------------------------------------------------------
 # low level functions mainly for basic geometric processing
 # ------------------------------------------------------------------
-
-import numpy as np
-
 def get_perpendicular_angle(
     line,
     # --- despike (isolated wiggles) ---
@@ -172,7 +168,6 @@ def get_perpendicular_angle(
         if sigma_pts <= 0:
             return x
         try:
-            from scipy.ndimage import gaussian_filter1d
             return gaussian_filter1d(x, sigma_pts, mode="nearest")
         except Exception:
             # fallback: moving average with window ~= 2.355*sigma (FWHM)
@@ -192,7 +187,8 @@ def get_perpendicular_angle(
         N = theta.size
         outlier = np.zeros(N, bool)
         for i in range(N):
-            i0 = max(0, i - half); i1 = min(N, i + half + 1)
+            i0 = max(0, i - half)
+            i1 = min(N, i + half + 1)
             w = theta[i0:i1]
             med = np.median(w)
             mad = np.median(np.abs(w - med)) + 1e-12
@@ -200,7 +196,8 @@ def get_perpendicular_angle(
                 outlier[i] = True
         isolated = outlier & ~np.roll(outlier, 1) & ~np.roll(outlier, -1)
         for i in np.where(isolated)[0]:
-            i0 = max(0, i - half); i1 = min(N, i + half + 1)
+            i0 = max(0, i - half)
+            i1 = min(N, i + half + 1)
             out[i] = np.median(out[i0:i1])
         return out
 
@@ -228,7 +225,8 @@ def get_perpendicular_angle(
                         break
                     if np.sign(dthds[left - 1]) == np.sign(dthds[right]):
                         break
-                    left -= 1; right += 1
+                    left -= 1
+                    right += 1
                 if right - left >= 2:
                     out[left+1:right] = np.interp(
                         s[left+1:right], (s[left], s[right]), (out[left], out[right])
@@ -244,8 +242,18 @@ def get_perpendicular_angle(
     N = len(xy)
     if N == 0:
         return np.array([], float)
-    if N == 1:
+    elif N == 1:
         return np.array([0.0], float)  # arbitrary
+    else:
+        # detect duplicates (either consecutive or anywhere)
+        dxy = xy[1:] - xy[:-1]
+        if np.any(np.hypot(dxy[:, 0], dxy[:, 1]) < 1e-6):
+            print("Warning: Polyline has duplicate or near-duplicate vertices.")
+
+        # also check for total arclength ~0
+        total_len = np.sum(np.hypot(dxy[:, 0], dxy[:, 1]))
+        if total_len < 1e-3:  # tolerance 1 mm
+            raise ValueError("Polyline total length is effectively zero.")
 
     # ---------- arclength & spacing (with guards) ----------
     seg = np.diff(xy, axis=0)            # (N-1,2)
@@ -308,6 +316,7 @@ def get_perpendicular_angle(
                 i += 1
 
         sigma_pts = max(smooth_m / max(ds_med, 1e-9), 0.0)
+        sigma_pts = min(sigma_pts, 100.0)  # cap smoothing kernel
         th_heavy = _gauss1d(thC, sigma_pts)
         th_light = _gauss1d(thC, max(0.33 * sigma_pts, 0.0))
         thC = np.where(protect, th_light, th_heavy)
@@ -672,12 +681,12 @@ def nudge_both_banks(thalweg, xr, yr, xl, yl, desired_river_width_range=None, po
         desired_river_width_range = np.array([35, 500])
     if points_mask is None:
         points_mask = np.ones((len(xr), ), dtype=bool)  # all points are valid
-    
+
     line = np.c_[(xr + xl)/2, (yr + yl)/2]
     perp_right = get_perpendicular_angle(line)
     perp_left = perp_right + np.pi
 
-    ds = ((xr - xl)**2 + (yr -yl)**2)**0.5
+    ds = ((xr - xl)**2 + (yr - yl)**2)**0.5
 
     # nudge both banks symmetrically
     # widen the channel if too narrow

@@ -514,8 +514,8 @@ def quality_check_hgrid(gd, area_threshold=None, skewness_threshold=None):
     print(f'\n{len(skew_ele)} skew (skewness >= {skewness_threshold})')
     if len(skew_ele) > 0:
         gd.skewness = cal_skewnewss(gd)
-        sorted_idx = np.argsort(gd.skewness[skew_ele])[::-1] 
-        sorted_skew_ele = np.sort(gd.skewness[skew_ele])[::-1] 
+        sorted_idx = np.argsort(gd.skewness[skew_ele])[::-1]
+        sorted_skew_ele = np.sort(gd.skewness[skew_ele])[::-1]
         print(f'Element id:            skewness,             xctr,             yctr')
         for i in sorted_idx[:min(100, len(sorted_skew_ele))]:
             ie = skew_ele[i]
@@ -595,24 +595,25 @@ def improve_hgrid(gd, prj='esri:102008', skewness_threshold=35, area_threshold=1
 
             print(f'\n----------------Fixing invalid elements, Round {n_fix}--------------------')
 
-            print('\n ------------------- Splitting bad quads >')
-            bp_name = f'{dirname}/bad_quad.bp'
-            # split bad quads
-            bad_quad_idx = gd.check_quads(angle_min=50,angle_max=130,fname=bp_name)
-            if bad_quad_idx is not None and len(bad_quad_idx) > 0:
-                gd.split_quads(angle_min=50, angle_max=130)
+            if sum(gd.i34 == 4) > 0:  # only check quads if there are any
+                print('\n ------------------- Splitting bad quads >')
+                bp_name = f'{dirname}/bad_quad.bp'
+                # split bad quads
+                bad_quad_idx = gd.check_quads(angle_min=50,angle_max=130,fname=bp_name)
+                if bad_quad_idx is not None and len(bad_quad_idx) > 0:
+                    gd.split_quads(angle_min=50, angle_max=130)
 
-                # outputs from split quads
-                bad_quad_bp = read_schism_bpfile(fname=bp_name)
-                print(f'{bad_quad_bp.nsta} bad quads split')
-                if bad_quad_bp.nsta > 0:
-                    if iDiagnosticOutputs:
-                        new_gr3_name = f"{dirname}/hgrid_split_quads.gr3"
-                        gd.save(new_gr3_name)
-                        print(f'the updated hgrid is saved as {new_gr3_name}')
-                    # quality check again since gd is updated
-                    grid_quality = quality_check_hgrid(gd, area_threshold=area_threshold, skewness_threshold=skewness_threshold)['i_invalid_nodes']
-                    if i_target_nodes is None: continue
+                    # outputs from split quads
+                    bad_quad_bp = read_schism_bpfile(fname=bp_name)
+                    print(f'{bad_quad_bp.nsta} bad quads split')
+                    if bad_quad_bp.nsta > 0:
+                        if iDiagnosticOutputs:
+                            new_gr3_name = f"{dirname}/hgrid_split_quads.gr3"
+                            gd.save(new_gr3_name)
+                            print(f'the updated hgrid is saved as {new_gr3_name}')
+                        # quality check again since gd is updated
+                        grid_quality = quality_check_hgrid(gd, area_threshold=area_threshold, skewness_threshold=skewness_threshold)['i_invalid_nodes']
+                        if i_target_nodes is None: continue
 
             gd.compute_all(fmt=1)
 
@@ -653,33 +654,32 @@ def improve_hgrid(gd, prj='esri:102008', skewness_threshold=35, area_threshold=1
     # end while loop
 
     if prj != 'epsg:4326':
-        gd_x, gd_y = gd.x, gd.y
+        gd_x, gd_y = gd.x, gd.y  # save a copy of the original coordinates
         gd.proj(prj0=prj, prj1='epsg:4326')
         gd_lon, gd_lat = gd.x, gd.y
 
-    print('\n ------------------- Splitting bad quads in lon/lat >')
-    bp_name = f'{dirname}/bad_quad.bp'
-    # split bad quads
-    gd.check_quads(angle_min=60,angle_max=120,fname=bp_name)
-    gd.split_quads(angle_min=60, angle_max=120)
-    # outputs from split quads
-    bad_quad_bp = read_schism_bpfile(fname=bp_name)
-    print(f'{bad_quad_bp.nsta} bad quads split')
-    if bad_quad_bp.nsta > 0:
-        if iDiagnosticOutputs:
-            new_gr3_name = f"{dirname}/hgrid_split_quads.gr3"
-            gd.save(new_gr3_name)
-            print(f'the updated hgrid is saved as {new_gr3_name}')
-        # quality check again since gd is updated
-        if prj != 'epsg:4326':
-            gd.x, gd.y = gd_x, gd_y
-        i_target_nodes = quality_check_hgrid(gd, area_threshold=area_threshold, skewness_threshold=skewness_threshold)['i_invalid_nodes']
-        if prj != 'epsg:4326':
-            gd.x, gd.y = gd_lon, gd_lat
+    if sum(gd.i34 == 4) > 0:  # only check quads if there are any
+        print('\n ------------------- Splitting bad quads in lon/lat >')
+        bp_name = f'{dirname}/bad_quad.bp'
+        # split bad quads
+        gd.check_quads(angle_min=60,angle_max=120,fname=bp_name)
+        gd.split_quads(angle_min=60, angle_max=120)
+        # outputs from split quads
+        bad_quad_bp = read_schism_bpfile(fname=bp_name)
+        print(f'{bad_quad_bp.nsta} bad quads split')
+        if bad_quad_bp.nsta > 0:
+            if iDiagnosticOutputs:
+                new_gr3_name = f"{dirname}/hgrid_split_quads.gr3"
+                gd.save(new_gr3_name)
+                print(f'the updated hgrid is saved as {new_gr3_name}')
+            # quality check again since gd is updated
+            if prj != 'epsg:4326':
+                gd.x, gd.y = gd_x, gd_y  # revert to original coordinates
+            i_target_nodes = quality_check_hgrid(gd, area_threshold=area_threshold, skewness_threshold=skewness_threshold)['i_invalid_nodes']
 
     print('\n ------------------- Outputting final hgrid >')
-    gd.grd2sms(f'{dirname}/hgrid.2dm')
-    gd.save(f'{dirname}/hgrid.ll', fmt=1)
+
+    return gd
 
     pass
 
@@ -689,7 +689,7 @@ def sample1():
     Sample usage 1 without command line interface.
     The input grid is in *.ll format and lon/lat
     '''
-    
+
     grid_dir = '/sciclone/schism10/feiye/STOFS3D-v8/R15e_v7/'
     grid_file = f'{grid_dir}/hgrid_xy_transferred.ll'
 
@@ -712,7 +712,10 @@ def sample1():
     write_diagnostics(outdir=grid_dir, grid_quality=grid_quality, hgrid_ref=gd_ll)
 
     # improve grid quality
-    improve_hgrid(gd_meter, n_intersection_fix=0, area_threshold=area_threshold, skewness_threshold=skewness_threshold, nmax=4)
+    gd = improve_hgrid(gd_meter, n_intersection_fix=0, area_threshold=area_threshold, skewness_threshold=skewness_threshold, nmax=4)
+
+    gd.grd2sms(f'{grid_dir}/hgrid.2dm')
+    gd.save(f'{grid_dir}/hgrid.ll', fmt=1)
 
 
 def sample2():
@@ -720,24 +723,24 @@ def sample2():
     Sample usage 2 without command line interface
     The input grid is in *.2dm format and esri:102008 projection
     '''
-    grid_dir = '/sciclone/schism10/Hgrid_projects/STOFS3D-v8/v31/Improve/'
-    grid_file = f'{grid_dir}/v31.2dm'
+    grid_dir = '/sciclone/schism10/Hgrid_projects/STOFS3D-v8/v51/'
+    grid_file = f'{grid_dir}/v51.2dm'
 
     # read hgrid
     # gd = read_schism_hgrid(grid_file)  # esri:102008
     gd = sms2grd(grid_file)
     gd.source_file = grid_file
+    gd_ll = copy.deepcopy(gd)  # save a copy
+    gd.proj(prj0='epsg:4326', prj1='esri:102008')  # ensure the unit is meters
 
     # this test may find any potential boundary issues
     gd.compute_area()
     gd.compute_bnd(method=1)
 
     # manually set parameters
-    skewness_threshold = 70
-    area_threshold = 1
+    skewness_threshold = 2
+    area_threshold = 5
 
-    gd_ll = copy.deepcopy(gd)
-    gd_ll.proj(prj0='esri:102008', prj1='epsg:4326')  # reproject to lon/lat if necessary
 
     grid_quality = quality_check_hgrid(gd, area_threshold=area_threshold, skewness_threshold=skewness_threshold)
     write_diagnostics(outdir=grid_dir, grid_quality=grid_quality, hgrid_ref=gd_ll)
@@ -745,6 +748,10 @@ def sample2():
     # improve grid quality
     improve_hgrid(gd, n_intersection_fix=0, area_threshold=area_threshold, skewness_threshold=skewness_threshold, nmax=2)
 
+    # project back to lon/lat if necessary
+    gd.proj(prj0='esri:102008', prj1='epsg:4326')
+    gd.grd2sms(f'{grid_dir}/hgrid.2dm')
+    gd.save(f'{grid_dir}/hgrid.ll', fmt=1)
 
 def main():
     '''
@@ -761,7 +768,14 @@ def main():
     # improve grid quality
     improve_hgrid(gd, n_intersection_fix=0, area_threshold=area_threshold, skewness_threshold=skewness_threshold, nmax=4)
 
+    grid_dir = pathlib.Path(grid_file).resolve().parent
+    if pathlib.Path(grid_file).suffix in ['.2dm']:
+        gd.grd2sms(f'{grid_dir}/improved_{pathlib.Path(grid_file).name}')
+    elif pathlib.Path(grid_file).suffix in ['.gr3', '.ll']:
+        gd.save(f'{grid_dir}/improved_{pathlib.Path(grid_file).name}', fmt=1)
+
 
 if __name__ == "__main__":
-    sample2()
-    # main()
+    # sample2()
+    main()
+
