@@ -11,7 +11,7 @@ from sklearn.neighbors import KDTree
 import geopandas as gpd
 
 from RiverMapper.SMS import SMS_MAP
-from RiverMapper.util import Rivers
+from RiverMapper.rivers import Rivers
 from pylib import read as read_schism_hgrid  # pip install pylibs-ocean
 # from pylib_experimental.schism_file import cread_schism_hgrid as read_schism_hgrid
 

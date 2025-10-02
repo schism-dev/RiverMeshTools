@@ -723,22 +723,22 @@ def sample2():
     Sample usage 2 without command line interface
     The input grid is in *.2dm format and esri:102008 projection
     '''
-    grid_dir = '/sciclone/schism10/Hgrid_projects/STOFS3D-v8/v51/'
-    grid_file = f'{grid_dir}/v51.2dm'
+    grid_dir = '/sciclone/schism10/Hgrid_projects/STOFS3D-v8/v51/Improve/'
+    grid_file = f'{grid_dir}/v51_s2v1.2dm'
 
     # read hgrid
     # gd = read_schism_hgrid(grid_file)  # esri:102008
     gd = sms2grd(grid_file)
     gd.source_file = grid_file
     gd_ll = copy.deepcopy(gd)  # save a copy
-    gd.proj(prj0='epsg:4326', prj1='esri:102008')  # ensure the unit is meters
+    gd_ll.proj(prj0='esri:102008', prj1='epsg:4326')
 
     # this test may find any potential boundary issues
     gd.compute_area()
     gd.compute_bnd(method=1)
 
     # manually set parameters
-    skewness_threshold = 2
+    skewness_threshold = 25
     area_threshold = 5
 
 
@@ -776,6 +776,6 @@ def main():
 
 
 if __name__ == "__main__":
-    # sample2()
-    main()
+    sample2()
+    # main()
 

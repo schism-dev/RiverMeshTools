@@ -6,6 +6,7 @@ import numpy as np
 from sklearn.neighbors import KDTree
 import geopandas as gpd
 from RiverMapper.SMS import SMS_MAP
+from RiverMapper.util import z_decoder
 
 
 class Rivers():

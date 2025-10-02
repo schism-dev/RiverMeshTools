@@ -248,12 +248,12 @@ def get_perpendicular_angle(
         # detect duplicates (either consecutive or anywhere)
         dxy = xy[1:] - xy[:-1]
         if np.any(np.hypot(dxy[:, 0], dxy[:, 1]) < 1e-6):
-            print("Warning: Polyline has duplicate or near-duplicate vertices.")
+            logger.warning("Warning: Polyline has duplicate or near-duplicate vertices.")
 
         # also check for total arclength ~0
         total_len = np.sum(np.hypot(dxy[:, 0], dxy[:, 1]))
         if total_len < 1e-3:  # tolerance 1 mm
-            raise ValueError("Polyline total length is effectively zero.")
+            logger.warning("Warning: Polyline total length is effectively zero.")
 
     # ---------- arclength & spacing (with guards) ----------
     seg = np.diff(xy, axis=0)            # (N-1,2)
@@ -853,7 +853,7 @@ def get_two_banks(S_list, thalweg, thalweg_eta, search_length, search_steps, min
         S_list, thalweg[:, 0], thalweg[:, 1], thalweg_eta, xt_right, yt_right, search_steps, elev_scale)
 
     if x_banks_left is None or x_banks_right is None:
-        logger.warning('warning: elev value is None, failed to find banks ... ')
+        logger.warning('warning: elev value is None, out of coverage ... ')
         status = -2  # status = -2 means bank search failure
         return None, None, None, None, None, None, status
 
@@ -2010,10 +2010,11 @@ def make_river_map(
     # "keep" arcs will be processed regardless of other criteria,
     # e.g., even when the banks are not found,
     # in which case a pseudo channel will be generated
+    # Note that keep = 1 and keep = -1 are reserved for NHD
     if "keep" in thalweg_gdf.columns:
         keep = thalweg_gdf['keep'].values
-        keep = np.where(np.isnan(keep), 0, keep).astype(int)  # replace NaN with 0 and convert to int
-        keep = np.where(np.equal(keep, None), 0, keep).astype(int)  # replace None with 0 and convert to int
+        keep = np.where(np.isnan(keep), -1, keep).astype(int)  # replace NaN with -1 and convert to int
+        keep = np.where(np.equal(keep, None), -1, keep).astype(int)  # replace None with -1 and convert to int
         logger.info(
             '%s "keep" field found in %s, "keep" thalwegs will be processed regardless of other criteria',
             mpi_print_prefix, thalweg_shp_fname
@@ -2076,7 +2077,7 @@ def make_river_map(
                 continue
 
             # set water level at each thalweg point (thalweg_eta), based on observation, simulation, estimation, etc.
-            if ikeep_thalweg[i] == 1 or elev_scale < 0:
+            if abs(ikeep_thalweg[i]) == 1 or elev_scale < 0:
                 # thalweg_eta will be set to 0 for the following cases:
                 # 1) keep = 1 is reserved for NHD, where tifs are dummy with 0 (land) and -1 (water)
                 # 2) barrier islands (elev_scale < 0) are always nearshore, where 0.0 is a good approximation
@@ -2092,7 +2093,7 @@ def make_river_map(
                 thalweg, const_bank_width=pseudo_channel_width)
 
         # preliminary check
-        if bank_search_status == -2:  # failed to find banks
+        if bank_search_status == -2:
             thalweg_endpoints_width[i*2] = 0.0
             thalweg_endpoints_width[i*2+1] = 0.0
             valid_thalwegs[i] = False
@@ -2101,7 +2102,7 @@ def make_river_map(
             thalweg_widths[i] = pseudo_channel_width
             thalweg_endpoints_width[i*2] = pseudo_channel_width
             thalweg_endpoints_width[i*2+1] = pseudo_channel_width
-            if bool(ikeep_thalweg[i]):
+            if ikeep_thalweg[i] > 0:  # keep this thalweg regardless of bank search result
                 logger.warning(
                     "%s warning: thalweg %d (id: %s)'s bank width is smaller than the minimum width, "
                     "it will likely fall back a pseudo channel", mpi_print_prefix, i+1, thalweg_id[i]
@@ -2236,7 +2237,7 @@ def make_river_map(
             if elevs is None:
                 raise ValueError(f"{mpi_print_prefix} error: some elevs not found on thalweg {i+1} ...")
 
-            if ikeep_thalweg[i] == 1 or elev_scale < 0:
+            if abs(ikeep_thalweg[i]) == 1 or elev_scale < 0:
                 # keep = 1 is reserved for NHD, where tifs are dummy with 0 (land) and -1 (water)
                 # barrier islands (when elev_scale=-1) are always nearshore, where 0.0 is a good approximation
                 thalweg_eta = 0.0 * elevs  # set uniform water level at 0.0, same as land level
@@ -2278,7 +2279,7 @@ def make_river_map(
             elevs = get_elev_from_tiles(thalweg[:, 0], thalweg[:, 1], S_list, scale=elev_scale)
             if elevs is None:
                 raise ValueError(f"{mpi_print_prefix} error: some elevs not found on thalweg {i+1} ...")
-            if ikeep_thalweg[i] == 1 or elev_scale < 0:
+            if abs(ikeep_thalweg[i]) == 1 or elev_scale < 0:
                 # keep = 1 is reserved for NHD, where tifs are dummy with 0 (land) and -1 (water)
                 # barrier islands (when elev_scale=-1) are always nearshore, where 0.0 is a good approximation
                 thalweg_eta = 0.0 * elevs  # set uniform water level at 0.0, same as land level
@@ -2319,7 +2320,7 @@ def make_river_map(
             elevs = get_elev_from_tiles(thalweg[:, 0], thalweg[:, 1], S_list, scale=elev_scale)
             if elevs is None:
                 raise ValueError(f"{mpi_print_prefix} error: some elevs not found on thalweg {i+1} ...")
-            if ikeep_thalweg[i] == 1 or elev_scale < 0:
+            if abs(ikeep_thalweg[i]) == 1 or elev_scale < 0:
                 # keep = 1 is reserved for NHD, where tifs are dummy with 0 (land) and -1 (water)
                 # barrier islands (when elev_scale=-1) are always nearshore, where 0.0 is a good approximation
                 thalweg_eta = 0.0 * elevs  # set uniform water level at 0.0, same as land level

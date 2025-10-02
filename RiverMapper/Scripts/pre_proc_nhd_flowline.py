@@ -323,11 +323,12 @@ def pre_process_nhdflowlines(
     # *) Dissolve lines with the same name (gnis_id), otherwise one river can be broken
     #    into too many segments due to intersection with tributaries. Most tributaries
     #    are negligible and discarded in Step 1)
-    print('dissolving lines with the same gnis_id')
-    lines = lines.dissolve(by='gnis_id', as_index=False)
-    lines = merge_lines(lines)
-    if diag_output:
-        lines.to_file(output_dir + input_flowline.stem + "_merged.shp")
+    if line_identifier is not None:
+        print(f'dissolving lines with the same line_identifier: {line_identifier}')
+        lines = lines.dissolve(by=line_identifier, as_index=False)
+        lines = merge_lines(lines)
+        if diag_output:
+            lines.to_file(output_dir + input_flowline.stem + "_merged.shp")
 
     # *) Group lines by inside and outside of NHDArea polygons. If a line intersects
     #    with a polygon, it is split into segments. This is important for RiverMapper
@@ -369,13 +370,14 @@ def pre_process_nhdflowlines(
     # *) Densify the vertices on each line. This is important for RiverMapper to
     #    accurately represent the river geometry. The resolution is set to 20 m,
     #    which can be adjusted based on your needs.
-    print('densifying lines')
-    for index, row in lines.iterrows():
-        geom = row.geometry
-        if isinstance(geom, LineString):
-            lines.at[index, 'geometry'] = densify_linestring(geom, along_segment_resolution)
-        else:
-            raise ValueError(f"Geometry at index {index} is not a LineString")
+    if along_segment_resolution is not None and along_segment_resolution > 0:
+        print('densifying lines')
+        for index, row in lines.iterrows():
+            geom = row.geometry
+            if isinstance(geom, LineString):
+                lines.at[index, 'geometry'] = densify_linestring(geom, along_segment_resolution)
+            else:
+                raise ValueError(f"Geometry at index {index} is not a LineString")
 
     # *) Add an attribute "keep = 1" to the new GeoDataFrame. This forces the lines
     #    to be expanded into river arcs in RiverMapper regardless of other criteria
@@ -439,13 +441,13 @@ def sample():
     pre_process_nhdflowlines(
         input_flowline=Path(
             "/sciclone/schism10/Hgrid_projects/STOFS3D-v8/a51_RiverMapper/Shapefiles/"
-            "nhdflowline_la_ms.shp"),
+            "a51filler_IWW_filler_cleaned_20m.shp"),
         input_nhdarea=Path(
             "/sciclone/schism10/Hgrid_projects/STOFS3D-v8/a51_RiverMapper/Shapefiles/"
             "nhdarea_la_ms_cleaned.shp"),
-        line_identifier='gnis_id',  # use gnis_id to select lines
+        line_identifier=None,  # 'gnis_id',  # use gnis_id to select lines
         max_segment_length=15000,  # split segments with a maximum segment length in kilometers
-        along_segment_resolution=20,  # densify segments with a resolution in meters, original points are retained
+        along_segment_resolution=None,  # 20,  # meters, densify while retaining original points
         diag_output=True  # set to True to output diagnostic shapefiles
     )
     print('Done!')
