@@ -160,8 +160,22 @@ class ConfigRiverMap():
             i_pseudo_channel=1, pseudo_channel_width=25,
             nrow_pseudo_channel=4, length_width_ratio=80.0,
             snap_point_reso_ratio=0.1, snap_arc_reso_ratio=0.1,
-            i_smooth_banks=False, river_threshold=(18, 18), min_arcs=4,
-            i_DiagnosticOutput=True, n_clean_iter=3,
+            i_smooth_banks=False, i_DiagnosticOutput=True, n_clean_iter=3,
+        )
+
+    @classmethod
+    def Marsh(cls):
+        '''
+        Similar to levees, but more divisions perpendicular to the marsh boundary lines
+        (equivalent to levee centerlines) and finer resolution in general
+
+        '''
+        return cls(
+            i_pseudo_channel=3, pseudo_channel_width=20,
+            nrow_pseudo_channel=7, length_width_ratio=5.0,
+            along_channel_reso_thres=(2, 10),
+            snap_point_reso_ratio=0.1, snap_arc_reso_ratio=0.1,
+            i_smooth_banks=True, i_DiagnosticOutput=True, n_clean_iter=3,
         )
 
     @classmethod

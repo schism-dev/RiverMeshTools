@@ -67,7 +67,7 @@ def merge_dry_run_outputs(output_dir):
     '''
     logger.info('\n------------------ Merging outputs from all cores for dry run --------------\n')
     time_merge_start = time.time()
-    
+
     # shapefiles
     valid_thalwegs = glob(f'{output_dir}/*valid_thalwegs.shp')
     if len(valid_thalwegs) > 0:
@@ -182,10 +182,10 @@ def river_map_mpi_driver(
     thalwegs2tile_groups, tile_groups_files, tile_groups2thalwegs = None, None, None
 
     if rank == 0:
+        silentremove(output_dir)
+        output_dir.mkdir(parents=True, exist_ok=True)
         if dems_json_file is not None:
             logger.info('A total of %s core(s) used.', size)
-            silentremove(output_dir)
-            output_dir.mkdir(parents=True, exist_ok=True)
 
             if i_grouping_cache:
                 cache_folder.mkdir(parents=True, exist_ok=True)
@@ -321,8 +321,18 @@ def river_map_mpi_driver(
             logger.info('\n--------------- Final clean-ups --------------------------------------------------------\n')
             time_final_cleanup_start = time.time()
 
+            arc_union = total_arcs_map.to_GeoDataFrame().geometry.unary_union
+            if arc_union.geom_type == "LineString":
+                arc_list = [arc_union]
+            elif arc_union.geom_type == "MultiLineString":
+                arc_list = list(arc_union.geoms)
+            elif arc_union.geom_type == "GeometryCollection":
+                arc_list = [g for g in arc_union.geoms if g.geom_type == "LineString"]
+            else:
+                raise TypeError(f"Unexpected arc union geometry type: {arc_union.geom_type}")
+
             total_arcs_cleaned = clean_arcs(
-                [arc for arc in total_arcs_map.to_GeoDataFrame().geometry.unary_union.geoms],
+                arc_list,
                 n_clean_iter=river_map_config.optional['n_clean_iter'],
                 snap_point_reso_ratio=river_map_config.optional['snap_point_reso_ratio'],
                 snap_arc_reso_ratio=river_map_config.optional['snap_arc_reso_ratio']
@@ -338,7 +348,10 @@ def river_map_mpi_driver(
 
             # outputs for OCSMesh
             if river_map_config.optional['i_OCSMesh']:
-                output_ocsmesh(output_dir, area_thres=0.85)
+                try:
+                    output_ocsmesh(output_dir, area_thres=0.85)
+                except Exception as e:
+                    logger.error('Error in outputting OCSMesh files: %s', e)
 
         # delete per-core outputs
         silentremove(glob(f'{output_dir}/Group*'))

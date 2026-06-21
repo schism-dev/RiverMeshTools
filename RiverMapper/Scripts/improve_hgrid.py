@@ -433,10 +433,10 @@ def grid_element_relax(gd, target_points=None, niter=3, ntier=0, max_dist=50, mi
     gd.write_hgrid(f'{wdir}/fixed.gr3', value=ifixed, fmt=0)
 
     # springing
-    script_dir =  os.path.dirname(__file__)
+    script_dir = os.path.dirname(__file__)
     print(f'running grid_spring with {niter} iteration(s)...')
     p = subprocess.Popen(f'{script_dir}/grid_spring', cwd=wdir, stdout=subprocess.PIPE, stdin=subprocess.PIPE)
-    p.stdin.write(f'{niter}\n{min_area_allowed}\n'.encode()) #expects a bytes type object
+    p.stdin.write(f'{niter}\n{min_area_allowed}\n'.encode())  # expects a bytes type object
     p.communicate()[0]
     p.stdin.close()
 
@@ -723,15 +723,17 @@ def sample2():
     Sample usage 2 without command line interface
     The input grid is in *.2dm format and esri:102008 projection
     '''
-    grid_dir = '/sciclone/schism10/Hgrid_projects/STOFS3D-v8/v51/Improve/'
-    grid_file = f'{grid_dir}/v51_s2v1.2dm'
+    grid_dir = '/sciclone/schism10/Hgrid_projects/STOFS3D-v8/v54_s2v3/Improve/'
+    grid_file = f'{grid_dir}/v54_s2v3.2dm'
 
     # read hgrid
     # gd = read_schism_hgrid(grid_file)  # esri:102008
     gd = sms2grd(grid_file)
     gd.source_file = grid_file
     gd_ll = copy.deepcopy(gd)  # save a copy
-    gd_ll.proj(prj0='esri:102008', prj1='epsg:4326')
+
+    # gd_ll.proj(prj0='esri:102008', prj1='epsg:4326')
+    gd.proj(prj0='epsg:4326', prj1='esri:102008')  # reproject to meters if necessary
 
     # this test may find any potential boundary issues
     gd.compute_area()
@@ -740,7 +742,6 @@ def sample2():
     # manually set parameters
     skewness_threshold = 25
     area_threshold = 5
-
 
     grid_quality = quality_check_hgrid(gd, area_threshold=area_threshold, skewness_threshold=skewness_threshold)
     write_diagnostics(outdir=grid_dir, grid_quality=grid_quality, hgrid_ref=gd_ll)
@@ -752,6 +753,43 @@ def sample2():
     gd.proj(prj0='esri:102008', prj1='epsg:4326')
     gd.grd2sms(f'{grid_dir}/hgrid.2dm')
     gd.save(f'{grid_dir}/hgrid.ll', fmt=1)
+
+
+def sample3():
+    '''
+    Sample usage 3 without command line interface.
+    The input grid is in esri:102008
+    '''
+
+    grid_dir = '/sciclone/schism10/Hgrid_projects/STOFS3D-v7.4/v32d/Improve/'
+    grid_file = f'{grid_dir}/v32d.2dm'
+
+    # this test may find any potential boundary issues
+    gd = sms2grd(grid_file)
+    gd.source_file = grid_file
+    gd.compute_area()
+    gd.compute_bnd(method=1)
+
+    # manually set parameters
+    skewness_threshold = 100
+    area_threshold = 1
+
+    gd_meter = copy.deepcopy(gd)
+    gd_ll = copy.deepcopy(gd)
+    gd_ll.proj(prj0='esri:102008', prj1='epsg:4326')  # reproject to lon/lat if necessary
+
+    grid_quality = quality_check_hgrid(gd_meter, area_threshold=area_threshold, skewness_threshold=skewness_threshold)
+    write_diagnostics(outdir=grid_dir, grid_quality=grid_quality, hgrid_ref=gd_ll)
+
+    # improve grid quality
+    gd = improve_hgrid(gd_meter, n_intersection_fix=0, area_threshold=area_threshold, skewness_threshold=skewness_threshold, nmax=4)
+
+    gd.grd2sms(f'{grid_dir}/hgrid.2dm')
+    gd.save(f'{grid_dir}/hgrid.gr3', fmt=1)
+    gd_ll = copy.deepcopy(gd)  # needed because gd is updated after improving grid quality
+    gd_ll.proj(prj0='esri:102008', prj1='epsg:4326')  # reproject to lon/lat if necessary
+    gd_ll.save(f'{grid_dir}/hgrid.ll', value=gd.dp, fmt=1)
+
 
 def main():
     '''
@@ -776,6 +814,6 @@ def main():
 
 
 if __name__ == "__main__":
-    sample2()
+    sample3()
     # main()
 

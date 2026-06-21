@@ -5,6 +5,7 @@ If the depth is less than the specified minimum depth, the point is dredged to
 satisfy the minimum depth requirement.
 '''
 
+import os
 import numpy as np
 from copy import deepcopy
 from sklearn.neighbors import KDTree
@@ -42,7 +43,9 @@ def dredge_river_transects(
 
     print('dredging river transects ...')
     dredged_points = rivers.dredge_inner_arcs(
-        region_gdf=region_gdf, min_channel_depth=min_channel_depth)
+        region_gdf=region_gdf, min_channel_depth=min_channel_depth,
+        inner_most_dredge=False,  # dredge all inner arcs, won't work if outer arcs are present
+    )
 
     print('mapping dredged points to the mesh ...')
     _, idx = KDTree(np.c_[hgrid_obj.x, hgrid_obj.y]).query(dredged_points[:, :2])
@@ -53,6 +56,7 @@ def dredge_river_transects(
     )
 
     print('saving dredged mesh ...')
+    os.makedirs(output_dir, exist_ok=True)
     hgrid_dredged.grd2sms(output_dir + '/hgrid_dredged.2dm')  # SMS format
     hgrid_dredged.save(output_dir + '/hgrid_dredged.gr3', fmt=1)  # SCHISM format
 
@@ -79,7 +83,7 @@ def sample_usage_dredge_river_transects():
 
     # output_dir = '/sciclone/schism10/feiye/STOFS3D-v8/I15a_v7/Bathy_edit/RiverArc_Dredge_test/'
     watershed_origional = gpd.read_file(
-        '/sciclone/schism10/Hgrid_projects/STOFS3D-v8/v31/Clip/outputs/watershed.shp'
+        '/sciclone/schism10/Hgrid_projects/STOFS3D-v8/v32/Clip/outputs/watershed.shp'
     )
     watershed = gpd.overlay(
         watershed_origional,
@@ -90,14 +94,15 @@ def sample_usage_dredge_river_transects():
     )
 
     hgrid_obj = read_schism_hgrid(
-        '/sciclone/schism10/feiye/STOFS3D-v8/I15a_v7/Bathy_edit/RiverArc_Dredge/hgrid.ll')
+        '/sciclone/schism10/Hgrid_projects/STOFS3D-v8/v32/Bathy_edit/hgrid_dem_edit.ll'
+    )
 
-    output_dir = '/sciclone/schism10/feiye/STOFS3D-v8/I15a_v7/Bathy_edit/RiverArc_Dredge/'
+    output_dir = '/sciclone/schism10/Hgrid_projects/STOFS3D-v8/v32/Bathy_edit/RiverArc_Dredge/'
 
     # Dredge the river transects
     dredge_river_transects(
         rivers, region_gdf=watershed, hgrid_obj=hgrid_obj,
-        min_channel_depth=1.0, output_dir=output_dir
+        min_channel_depth=1.0, output_dir=output_dir,
     )
 
 

@@ -128,10 +128,16 @@ def make_feeder_channel():
     # grid_boundary_shp_fname = f'{output_dir}/lbnd_coastal_ocean.shp'  # grid_bnd, no need to dissolve, rm CBDB, must be in esri:102008
     # reverse_arc = False  # used for NHD based river arcs
 
-    output_dir = '/sciclone/schism10/Hgrid_projects/STOFS3D-v8/v43s2_RiverMapper/v44/Feeder/'
+    output_dir = '/sciclone/schism10/Hgrid_projects/STOFS3D-v7.4/v32c/Feeder/'
     rivermap_fname = f'{output_dir}/total_river_arcs_extra.map'
-    grid_boundary_shp_fname = f'{output_dir}/lbnd_coastal_mesh_bnd.shp'  # grid_bnd, no need to dissolve
-    reverse_arc = True  # used for NHD based river arcs
+    grid_boundary_shp_fname = f'{output_dir}/lbnd_coastal_ocean.shp'  # grid_bnd, no need to dissolve, rm CBDB, must be in esri:102008
+    reverse_arc = False  # True for NHD based river arcs
+
+
+    # output_dir = '/sciclone/schism10/Hgrid_projects/STOFS3D-v8/v43s2_RiverMapper/v44/Feeder/'
+    # rivermap_fname = f'{output_dir}/total_river_arcs_extra.map'
+    # grid_boundary_shp_fname = f'{output_dir}/lbnd_coastal_mesh_bnd.shp'  # grid_bnd, no need to dissolve
+    # reverse_arc = True  # used for NHD based river arcs
 
     # -------------------- end inputs ----------------
 

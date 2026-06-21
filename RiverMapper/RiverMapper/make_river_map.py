@@ -1028,10 +1028,16 @@ def set_inner_arc_position(nrow_arcs, position_type='regular'):
         inner_arc_position = np.linspace(0.0, 1.0, nrow_arcs)
     elif position_type == 'fake':  # default levee
         inner_arc_position = np.array([0.0, 6.75, 11.25, 18.0]) / 18
+    elif position_type == 'left half':
+        inner_arc_position = np.linspace(0.0, 0.5, round(nrow_arcs/2))
+    elif position_type == 'right half':
+        inner_arc_position = np.linspace(0.5, 1.0, round(nrow_arcs/2))
     elif position_type == 'toward_center':  # denser near center
         raise NotImplementedError('toward_center not implemented')
     elif position_type == 'toward_banks':  # denser near banks
         raise NotImplementedError('toward_banks not implemented')
+    elif position_type == '':  # no inner arcs or banks
+        inner_arc_position = None
     else:
         raise ValueError(f'unknown inner arc position type: {position_type}')
 
@@ -1812,6 +1818,14 @@ def make_river_map(
     These TIFs should cover the area of interest and be arranged by priority (higher priority ones in front) |
 
     | thalweg_shp_fname | name of a polyline shapefile containing the thalwegs |
+    Additional notes on the thalweg shapefile for special use cases:
+    a linestring can have the following extra fields to control the processing of that thalweg:
+    - 'keep' is a boolean field indicating whether to keep this thalweg despite other criteria
+        (e.g., river width) that may lead to its removal;
+    - 'dummy' is a boolean field indicating whether this thalweg is a dummy one
+        that is retained as is without searching for river banks.
+    - 'arc_pos' is a string field indicating the position of inner arcs to be used in set_inner_arc_position
+
     | output_dir | must specify one |
 
     <Optional Inputs>:
@@ -1862,9 +1876,11 @@ def make_river_map(
 
     | i_pseudo_channel | int |
     0:  no pseudo channel, nrow_pseudo_channel and pseudo_channel_width are ignored;
-    1: fixed-width channel with nrow elements in the cross-channel direction,
-    it can also be used to generate a fixed-width levee for a given levee centerline;
+    1: fixed-width channel with 4 elements (see 'fake' in set_inner_arc_position)
+        in the cross-channel direction to resolve levee foot and top nodes
     2: (default) implement a pseudo channel when the river is poorly defined in DEM
+    3: fixed-width channel with nrow_pseudo_channel elements in the cross-channel direction
+        for specific applications (e.g., marshes)
 
     | pseudo_channel_width | float | width of the pseudo channel (in meters) |
     | pseudo_channel_dl | float | along channel resolution of the pseudo channel (in meters) |
@@ -1881,7 +1897,7 @@ def make_river_map(
     nudge_ratio = np.array((0.1, 2.0))  # ratio between nudging distance to mean half-channel-width
     MapUnit2METER = 1.0  # ratio between actual map unit and meter; deprecated, just use lon/lat for any inputs
 
-    if i_pseudo_channel == 1:
+    if i_pseudo_channel in [1, 3]:  # fixed-width pseudo channel (levees and marshes)
         require_dem = False
         endpoints_scale = 1.0
     else:
@@ -1890,56 +1906,60 @@ def make_river_map(
     # ------------------------- end other inputs ---------------------------
 
     # ----------------------   pre-process some inputs -------------------------
-    river_threshold = np.array(river_threshold) / MapUnit2METER
-    pseudo_channel_length_width_ratio = pseudo_channel_dl / (pseudo_channel_width / (nrow_pseudo_channel - 1))
+    if i_pseudo_channel in [1, 3]:  # user-defined pseudo channel
+        max_nrow_arcs = nrow_pseudo_channel
+        outer_arcs_positions = np.array([]).reshape(-1, )  # no outer arcs
+    else:  # normal channels based on DEM
+        river_threshold = np.array(river_threshold) / MapUnit2METER
+        pseudo_channel_length_width_ratio = pseudo_channel_dl / (pseudo_channel_width / (nrow_pseudo_channel - 1))
 
-    if custom_width2narcs is not None:
-        if width2narcs_option != 'custom':
-            logger.warning(
-                '%s warning: custom_width2narcs specified but width2narcs_option is not "custom",'
-                'reset to "custom"', mpi_print_prefix
+        if custom_width2narcs is not None:
+            if width2narcs_option != 'custom':
+                logger.warning(
+                    '%s warning: custom_width2narcs specified but width2narcs_option is not "custom",'
+                    'reset to "custom"', mpi_print_prefix
+                )
+                width2narcs_option = 'custom'
+
+            # decorate the function to accept the same parameters as default_width2narcs
+            def decorated_custom_width2narcs(width, min_arcs=min_arcs, opt=width2narcs_option):
+                if opt != 'custom':
+                    raise ValueError('opt must be "custom"')
+                # enforce min_arcs and integer return value despite user's evaluation
+                return max(min_arcs, int(custom_width2narcs(width)))
+
+            width2narcs = decorated_custom_width2narcs
+        else:
+            width2narcs = default_width2narcs
+
+        outer_arcs_positions = np.array(outer_arcs_positions).reshape(-1, )  # example: [0.1, 0.2]
+        if np.any(outer_arcs_positions <= 0.0):
+            err_msg = (
+                f'{mpi_print_prefix} outer arcs position must > 0,'
+                'a pair of arcs (one on each side of the river) are placed for each position value'
             )
-            width2narcs_option = 'custom'
+            logger.error(err_msg)
+            raise ValueError(err_msg)
+        if len(outer_arcs_positions) > 0:  # limit cleaning threshold so that outer arcs are not removed
+            min_snap_ratio = np.min(outer_arcs_positions) * 0.8
+            if snap_point_reso_ratio > min_snap_ratio:
+                logger.warning(
+                    '%s snap_point_reso_ratio %s is too large for outer arcs, reset to %s',
+                    mpi_print_prefix, snap_point_reso_ratio, min_snap_ratio
+                )
+                snap_point_reso_ratio = min_snap_ratio
+            if snap_arc_reso_ratio > min_snap_ratio:
+                logger.warning(
+                    '%s snap_arc_reso_ratio %s is too large for outer arcs, reset to %s',
+                    mpi_print_prefix, snap_arc_reso_ratio, min_snap_ratio
+                )
+                snap_arc_reso_ratio = min_snap_ratio
 
-        # decorate the function to accept the same parameters as default_width2narcs
-        def decorated_custom_width2narcs(width, min_arcs=min_arcs, opt=width2narcs_option):
-            if opt != 'custom':
-                raise ValueError('opt must be "custom"')
-            # enforce min_arcs and integer return value despite user's evaluation
-            return max(min_arcs, int(custom_width2narcs(width)))
-
-        width2narcs = decorated_custom_width2narcs
-    else:
-        width2narcs = default_width2narcs
-
-    outer_arcs_positions = np.array(outer_arcs_positions).reshape(-1, )  # example: [0.1, 0.2]
-    if np.any(outer_arcs_positions <= 0.0):
-        err_msg = (
-            f'{mpi_print_prefix} outer arcs position must > 0,'
-            'a pair of arcs (one on each side of the river) are placed for each position value'
-        )
-        logger.error(err_msg)
-        raise ValueError(err_msg)
-    if len(outer_arcs_positions) > 0:  # limit cleaning threshold so that outer arcs are not removed
-        min_snap_ratio = np.min(outer_arcs_positions) * 0.8
-        if snap_point_reso_ratio > min_snap_ratio:
-            logger.warning(
-                '%s snap_point_reso_ratio %s is too large for outer arcs, reset to %s',
-                mpi_print_prefix, snap_point_reso_ratio, min_snap_ratio
-            )
-            snap_point_reso_ratio = min_snap_ratio
-        if snap_arc_reso_ratio > min_snap_ratio:
-            logger.warning(
-                '%s snap_arc_reso_ratio %s is too large for outer arcs, reset to %s',
-                mpi_print_prefix, snap_arc_reso_ratio, min_snap_ratio
-            )
-            snap_arc_reso_ratio = min_snap_ratio
-
-    # maximum number of arcs to resolve a channel (including bank arcs, inner arcs and outer arcs)
-    max_nrow_arcs = (
-        width2narcs(4 * river_threshold[-1], min_arcs=min_arcs, opt=width2narcs_option) +
-        2 * outer_arcs_positions.size
-    )  # 4*river_threshold[-1] to be safe, since 1.1 * river_threshold[-1] is the search length
+        # maximum number of arcs to resolve a channel (including bank arcs, inner arcs and outer arcs)
+        max_nrow_arcs = (
+            width2narcs(4 * river_threshold[-1], min_arcs=min_arcs, opt=width2narcs_option) +
+            2 * outer_arcs_positions.size
+        )  # 4*river_threshold[-1] to be safe, since 1.1 * river_threshold[-1] is the search length
 
     # ---------------------- end pre-processing some inputs -------------------------
 
@@ -2022,6 +2042,13 @@ def make_river_map(
     else:
         keep = np.zeros((len(l2g), ), dtype=int)
 
+    # Read "inner_arc_pos" field if available (only for pseudo channels)
+    if "arc_pos" in thalweg_gdf.columns:
+        inner_arc_pos = thalweg_gdf['arc_pos'].values
+    else:
+        # None if not available
+        inner_arc_pos = [None] * len(l2g)
+
     # "id" field is used to identify thalwegs, which is useful for debugging
     if "id" in thalweg_gdf.columns:
         tid = thalweg_gdf['id'].values
@@ -2038,11 +2065,13 @@ def make_river_map(
 
     idummy_thalweg = []  # size will be the number of selected thalwegs
     ikeep_thalweg = []  # size will be the number of selected thalwegs
+    inner_arc_pos_thalweg = []  # size will be the number of selected thalwegs
     thalweg_id = []
     for i, idx in enumerate(l2g):
         if i in selected_thalweg:
             idummy_thalweg.append(dummy[i])
             ikeep_thalweg.append(keep[i])
+            inner_arc_pos_thalweg.append(inner_arc_pos[i])
             thalweg_id.append(tid[i])
             thalwegs.append(xyz[idx, :])
             thalwegs_lonlat.append(xyz_lonlat[idx, :])
@@ -2200,7 +2229,7 @@ def make_river_map(
                 width[width == sorted_widths[0]] = np.mean(width[width > sorted_widths[0]])
 
         # set number of cross-channel elements
-        if i_pseudo_channel == 1:  # for special features like levees and barrier islands
+        if i_pseudo_channel in [1, 3]:  # for special features like levees and barrier islands
             this_nrow_arcs = nrow_pseudo_channel
         else:
             this_nrow_arcs = min(
@@ -2224,13 +2253,17 @@ def make_river_map(
 
         # Find bank arcs and inner arcs
         # Under 4 cases (Case #), the quality_controlled flag is set to True
-        inner_arc_position = None
         quality_controlled = False
-        if i_pseudo_channel == 1:  # for special features like levees and barrier islands
+        if i_pseudo_channel in [1, 3]:  # for special features like levees and barrier islands, marshes
             quality_controlled = True  # (Case 1) always true for pseudo channel
             x_banks_left, y_banks_left, x_banks_right, y_banks_right, _, width = get_fake_banks(
                 thalweg, const_bank_width=pseudo_channel_width)
-            inner_arc_position = set_inner_arc_position(nrow_arcs=nrow_pseudo_channel, position_type='fake')
+            if inner_arc_pos_thalweg[i] is None:
+                inner_arc_position = set_inner_arc_position(
+                    nrow_arcs=this_nrow_arcs, position_type='fake')
+            else:
+                inner_arc_position = set_inner_arc_position(
+                    nrow_arcs=this_nrow_arcs, position_type=inner_arc_pos_thalweg[i])
         else:  # real channels, try to find banks first, even if dry run suggests pseudo channel
             # update thalweg info
             elevs = get_elev_from_tiles(thalweg[:, 0], thalweg[:, 1], S_list, scale=elev_scale)
@@ -2341,7 +2374,7 @@ def make_river_map(
                 if i_pseudo_channel == 0:
                     logger.warning('%s warning: neglecting the thalweg ...\n', mpi_print_prefix)
                     continue
-                # i_pseudo_channel == 1 already handled above
+                # i_pseudo_channel in [1, 3] already handled above
                 elif i_pseudo_channel == 2:
                     # (Case 2): Real river but no banks found, implement a pseudo channel as a fallback
                     quality_controlled = True  # quality check waived for pseudo channel
@@ -2555,7 +2588,8 @@ def make_river_map(
             SMS_MAP(arcs=original_banks.reshape((-1, 1))).writer(
                 filename=f'{output_dir}/{output_prefix}original_banks.map')
 
-            if i_pseudo_channel != 1:  # skip the following outputs if it is a pseudo channel
+            if i_pseudo_channel not in [1, 3]:  # not a pre-defined pseudo channel
+                # only output thalweg-related diagnostic outputs for real rivers
                 SMS_MAP(arcs=cc_arcs.reshape((-1, 1))).writer(
                     filename=f'{output_dir}/{output_prefix}cc_arcs.map')
                 SMS_MAP(arcs=smoothed_thalwegs).writer(

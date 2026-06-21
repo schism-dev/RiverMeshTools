@@ -138,7 +138,7 @@ class Rivers():
 
     def dredge_inner_arcs(
         self, min_channel_depth=1, region_gdf=None, diag_output_dir=None,
-        inner_most_dredge=True,
+        inner_most_dredge=True, measured_from_high_bank=True
     ) -> np.ndarray:
         '''
         Dredge the inner longitudinal transects based on the difference between
@@ -147,10 +147,15 @@ class Rivers():
         Use the valid_idx to filter out the rivers that are not in the region of interest
 
         :param min_channel_depth: float, depth to dredge the inner transects,
-             measured from the higher bank
+             measured from the either bank
         :param region_gdf: gpd.GeoDataFrame, region of interest
         :param diag_output_dir: str, directory to save diagnostic files
         :param inner_most_dredge: bool dredge only the two inner most arcs
+        :param measured_from_high_bank: bool, measure the dredging depth from the higher bank if True.
+            However, measuring from the higher bank is risky when only one bank is resolved in DEM/mesh,
+            in which case the water will spill to the other side and cause connectivity issues.
+            Measuring from the lower bank is more aggressive and preserves the channel better.
+            
 
         :return: dredged_points: np.ndarray, shape=(n_points, 3),
             x, y, z coordinates of dredged points
@@ -166,9 +171,12 @@ class Rivers():
             if any(self.idx[arcs_id]):
                 # inside the watershed, i.e., where most river arc points coorespond to mesh nodes
 
-                # Measure target dp from the higher bank's dp.
+                # Measure target dp from either bank's dp; dp is positive downward.
                 # rivers_coor: Left bank and right bank; along-river index; z of xyz
-                bank_dp = np.min(self.rivers_coor[k][[0, -1], :, 2], axis=0)
+                if measured_from_high_bank:
+                    bank_dp = np.min(self.rivers_coor[k][[0, -1], :, 2], axis=0)
+                else:  # measure from the lower bank, which is more aggressive and preserves the channel better
+                    bank_dp = np.max(self.rivers_coor[k][[0, -1], :, 2], axis=0)
                 target_thalweg_dp = bank_dp + min_channel_depth  # target thalweg dp, positive downward
 
                 # dredge the inner transects
