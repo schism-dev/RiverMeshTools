@@ -13,12 +13,40 @@
     "buffer_join_style": 1
   },
   "expected": {
-    "fleshy": {"count": 1, "area_m2": 7963.621334027, "sha256": "bb3cfdc214a36cfc9c74b8fad20e37c2a7854fdf932f537c52d72312ec79d8fe"},
-    "skinny": {"count": 5, "area_m2": 996.374433088, "sha256": "cb33b1ca97966c73ea583c497525716f14bb2a9fa786c6cf6cad3820974c7719"},
-    "core": {"count": 1, "area_m2": 4832.792054839, "sha256": "c272c5ff53ef6ca770c6f4b496ab0790b30108418703499443dce8d1d8d71c65"},
-    "filtered": {"count": 1, "area_m2": 8970.788910984, "sha256": "27985938023cd0d939a87e1a1e46cc88ecc4f392d5e526189223a4011cc4af8a"},
-    "fleshy_mask": {"count": 1, "area_m2": 7973.240386338, "sha256": "5e8904d3590c28368335d5b3b1a31dfe1141c72dbd8ac41c8785ed6d155c951a"},
-    "candidate_skinny_mask": {"count": 6, "area_m2": 997.548524646, "sha256": "762d42eca718858b3ddfe0dfa80e402484239bb7c1f1147b1ad4287f217fce63"},
-    "candidate_skinny_raw": {"count": 5, "area_m2": 996.374433088, "sha256": "cb33b1ca97966c73ea583c497525716f14bb2a9fa786c6cf6cad3820974c7719"}
+    "fleshy": {
+      "count": 1,
+      "area_m2": 7963.621334027,
+      "sha256": "bb3cfdc214a36cfc9c74b8fad20e37c2a7854fdf932f537c52d72312ec79d8fe"
+    },
+    "skinny": {
+      "count": 5,
+      "area_m2": 996.374433088,
+      "sha256": "cb33b1ca97966c73ea583c497525716f14bb2a9fa786c6cf6cad3820974c7719"
+    },
+    "core": {
+      "count": 1,
+      "area_m2": 4832.792054839,
+      "sha256": "c272c5ff53ef6ca770c6f4b496ab0790b30108418703499443dce8d1d8d71c65"
+    },
+    "filtered": {
+      "count": 1,
+      "area_m2": 8970.788910984,
+      "sha256": "27985938023cd0d939a87e1a1e46cc88ecc4f392d5e526189223a4011cc4af8a"
+    },
+    "fleshy_mask": {
+      "count": 1,
+      "area_m2": 7973.240386338,
+      "sha256": "5e8904d3590c28368335d5b3b1a31dfe1141c72dbd8ac41c8785ed6d155c951a"
+    },
+    "candidate_skinny_mask": {
+      "count": 6,
+      "area_m2": 997.548524646,
+      "sha256": "762d42eca718858b3ddfe0dfa80e402484239bb7c1f1147b1ad4287f217fce63"
+    },
+    "candidate_skinny_raw": {
+      "count": 5,
+      "area_m2": 996.374433088,
+      "sha256": "cb33b1ca97966c73ea583c497525716f14bb2a9fa786c6cf6cad3820974c7719"
+    }
   }
 }

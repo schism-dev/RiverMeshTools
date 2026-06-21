@@ -9,9 +9,8 @@ a reviewed algorithm change is correct, regenerate the values in the baseline
 JSON deliberately; do not merely weaken or remove the assertions.
 """
 
-from contextlib import contextmanager, redirect_stdout
+from contextlib import redirect_stdout
 import hashlib
-import importlib.util
 import io
 import json
 from pathlib import Path
@@ -20,10 +19,12 @@ import unittest
 from shapely import wkt
 from shapely.ops import unary_union
 
+from RiverMapper import marsh
 
-REPO_ROOT = Path(__file__).resolve().parents[2]
-SCRIPT_PATH = REPO_ROOT / "Scripts" / "marsh_decomposition.py"
-BASELINE_PATH = Path(__file__).parent / "data" / "marsh_decomposition_baseline.json"
+
+BASELINE_PATH = (
+    Path(__file__).parent / "data" / "marsh_decomposition_baseline.json"
+)
 
 LAYER_NAMES = (
     "fleshy",
@@ -34,14 +35,6 @@ LAYER_NAMES = (
     "candidate_skinny_mask",
     "candidate_skinny_raw",
 )
-
-
-def load_script_module():
-    """Load the script as a library without executing its main workflow."""
-    spec = importlib.util.spec_from_file_location("marsh_decomposition", SCRIPT_PATH)
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
 
 
 def geometry_fingerprint(geometries):
@@ -63,41 +56,25 @@ def layer_summary(geometries):
     }
 
 
-@contextmanager
-def configured_module(module, parameters):
-    """Apply fixture parameters and restore the module globals afterward."""
-    core_distance = parameters["fleshy_core_dist"]
-    global_parameters = {
-        key: value
-        for key, value in parameters.items()
-        if key != "fleshy_core_dist"
-    }
-    previous = {key: getattr(module, key) for key in global_parameters}
-    try:
-        for key, value in global_parameters.items():
-            setattr(module, key, value)
-        yield core_distance
-    finally:
-        for key, value in previous.items():
-            setattr(module, key, value)
-
-
 class TestMarshDecompositionRegression(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls.module = load_script_module()
+        cls.module = marsh
         cls.fixture = json.loads(BASELINE_PATH.read_text(encoding="utf-8"))
         cls.original = wkt.loads(cls.fixture["input_wkt"])
+        cls.config = cls.module.make_config(
+            "standard",
+            cls.fixture["parameters"],
+        )
 
     def decompose(self):
-        with configured_module(self.module, self.fixture["parameters"]) as core_distance:
-            # Cleanup warnings are useful in production but just add noise to
-            # successful regression-test output.
-            with redirect_stdout(io.StringIO()):
-                result = self.module.decompose_marsh_polygon(
-                    self.original,
-                    fleshy_core_dist=core_distance,
-                )
+        # Cleanup warnings are useful in production but just add noise to
+        # successful regression-test output.
+        with redirect_stdout(io.StringIO()):
+            result = self.module.decompose_marsh_polygon(
+                self.original,
+                self.config,
+            )
         return dict(zip(LAYER_NAMES, result))
 
     def test_geometry_matches_approved_baseline(self):
@@ -116,7 +93,7 @@ class TestMarshDecompositionRegression(unittest.TestCase):
                 self.assertEqual(
                     geometry_fingerprint(geometries),
                     expected["sha256"],
-                    "Geometry changed. Review the output before approving a new baseline.",
+                    "Geometry changed; review it before approving a baseline.",
                 )
 
     def test_final_classes_are_valid_disjoint_subsets(self):
@@ -141,9 +118,63 @@ class TestMarshDecompositionRegression(unittest.TestCase):
         first = self.decompose()
         second = self.decompose()
         self.assertEqual(
-            {name: geometry_fingerprint(geoms) for name, geoms in first.items()},
-            {name: geometry_fingerprint(geoms) for name, geoms in second.items()},
+            {
+                name: geometry_fingerprint(geoms)
+                for name, geoms in first.items()
+            },
+            {
+                name: geometry_fingerprint(geoms)
+                for name, geoms in second.items()
+            },
         )
+
+    def test_any_discard_produces_warning(self):
+        output = io.StringIO()
+        with redirect_stdout(output):
+            self.module.decompose_marsh_polygon(self.original, self.config)
+
+        self.assertIn("direct_discard excluded", output.getvalue())
+
+    def test_recipe_can_be_overridden_without_mutating_it(self):
+        config = self.module.make_config(
+            "fast_preview",
+            {"skinny_full_width_threshold": 30.0, "filter_dist": 2.5},
+        )
+
+        self.assertEqual(config.skeleton_dx, 1.0)
+        self.assertEqual(config.filter_dist, 2.5)
+        self.assertEqual(config.effective_fleshy_core_dist, 15.0)
+        self.assertEqual(
+            self.module.make_config("fast_preview").filter_dist,
+            5.0,
+        )
+
+    def test_run_files_are_separate_from_recipe_parameters(self):
+        self.assertFalse(hasattr(self.config, "input_file"))
+        self.assertFalse(hasattr(self.config, "output_file"))
+
+        recipe, run_config = self.module.parse_run_config(
+            [
+                "--recipe",
+                "fast_preview",
+                "--input",
+                "example_input.shp",
+                "--output",
+                "example_output.gpkg",
+            ]
+        )
+
+        self.assertEqual(recipe, "fast_preview")
+        self.assertEqual(run_config.input_file, Path("example_input.shp"))
+        self.assertEqual(run_config.output_file, Path("example_output.gpkg"))
+        self.assertEqual(run_config.parameters.skeleton_dx, 1.0)
+
+    def test_invalid_recipe_parameter_is_rejected(self):
+        with self.assertRaisesRegex(
+            ValueError,
+            "Unknown configuration parameter",
+        ):
+            self.module.make_config("standard", {"skeleton_resolution": 1.0})
 
 
 if __name__ == "__main__":

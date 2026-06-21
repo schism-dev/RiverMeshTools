@@ -17,11 +17,26 @@ The figure below shows an example near the Pearl River, Louisiana:
 This method is being tested with the latest developmental version of [STOFS-3D-Atlantic](https://registry.opendata.aws/noaa-nos-stofs3d/) and a sample application will be added soon.
 
 
-## Installation 
-Python 3.9 or above is recommended
+## Installation
+
+Python 3.10 or above is required.
+
+Install the default RiverMapper dependencies with:
 
 ```bash
 pip install git+https://github.com/schism-dev/RiverMeshTools.git#subdirectory=RiverMapper
+```
+
+Marsh skeleton extraction additionally requires `scikit-image`. Install the
+marsh extra (or the equivalent `full` extra) when that functionality is
+needed:
+
+```bash
+# From a local checkout:
+pip install ".[marsh]"
+
+# Or install all optional functionality:
+pip install ".[full]"
 ```
 
 You may need to manually install gdal and/or mpi4py (e.g., conda install gdal or mamba install gdal) if there is an error related to it, then redo the above 'pip install' command.

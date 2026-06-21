@@ -1,37 +1,6 @@
-import setuptools
-import io
+"""Compatibility shim for tools that still invoke setup.py directly."""
 
-with io.open('README.md','r', encoding='utf8') as fh:
-  long_description = fh.read()
+from setuptools import setup
 
-  setuptools.setup(
-  name='RiverMapper',
-  version='1.0.4',
-  author='Fei Ye',
-  author_email='feiye@vims.edu',
-  description='Python tools for generating watershed river arcs for meshing',
-  long_description=long_description,
-  long_description_content_type="text/markdown",
-  url='',
-  project_urls = {
-    "Issues": ""
-  },
-  license='MIT',
-  packages=[
-    'RiverMapper',
-  ],
-  package_data={'RiverMapper': ['Datafiles/*']},
-  install_requires=[
-    'gdal>=3.6.0',
-    'rasterio>=1.3',
-    'shapely>=2.0.0',
-    'geopandas>=0.12.0',
-    'numpy',
-    'pandas',
-    'scipy',
-    'Scikit-learn',
-    'mpi4py',
-    'tqdm',
-    'rtree',
-  ],
-)
+
+setup()
