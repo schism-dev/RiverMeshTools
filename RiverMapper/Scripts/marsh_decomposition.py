@@ -39,7 +39,6 @@ Important:
 """
 
 from pathlib import Path
-from mpi4py import MPI
 import geopandas as gpd
 import numpy as np
 import pandas as pd
@@ -1578,6 +1577,11 @@ def extract_arc_lines_from_decomposed_gpkg(
 
 
 def main():
+    # Import MPI only for the executable workflow.  Keeping it out of module
+    # initialization allows the geometry functions to be imported by serial
+    # tools and regression tests without starting an MPI runtime.
+    from mpi4py import MPI
+
     comm = MPI.COMM_WORLD
     rank = comm.Get_rank()
     size = comm.Get_size()
