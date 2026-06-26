@@ -1,9 +1,12 @@
 import unittest
 
+import numpy as np
 from shapely.geometry import GeometryCollection, LineString, MultiLineString, Point
 
 from RiverMapper.make_river_map import (
     line_geometries_from_union,
+    point_to_candidate_segment_distances,
+    snap_closeby_points_global,
     union_line_geometries,
 )
 
@@ -38,6 +41,54 @@ class TestMakeRiverMapCleanup(unittest.TestCase):
         self.assertTrue(
             all(isinstance(arc, LineString) for arc in noded_arcs)
         )
+
+    def test_candidate_segment_distances_are_vectorized_per_point(self):
+        points = np.array([[1.0, 1.0], [4.0, 0.0]])
+        candidate_segments = np.array(
+            [
+                [
+                    [0.0, 0.0, 2.0, 0.0],
+                    [3.0, 3.0, 3.0, 5.0],
+                ],
+                [
+                    [0.0, 0.0, 2.0, 0.0],
+                    [3.0, -1.0, 3.0, 1.0],
+                ],
+            ]
+        )
+
+        distances = point_to_candidate_segment_distances(
+            points,
+            candidate_segments,
+        )
+
+        np.testing.assert_allclose(
+            distances,
+            np.array(
+                [
+                    [1.0, np.sqrt(8.0)],
+                    [2.0, 1.0],
+                ]
+            ),
+        )
+
+    def test_point_snapping_keeps_local_width_thresholds(self):
+        points = np.array(
+            [
+                [0.0, 0.0, 1.0],
+                [0.5, 0.0, 1.0],
+                [10.0, 0.0, 10.0],
+                [10.5, 0.0, 10.0],
+            ]
+        )
+
+        snapped, _ = snap_closeby_points_global(
+            points,
+            snap_point_reso_ratio=0.1,
+        )
+
+        self.assertFalse(np.array_equal(snapped[0], snapped[1]))
+        np.testing.assert_array_equal(snapped[2], snapped[3])
 
 
 if __name__ == "__main__":

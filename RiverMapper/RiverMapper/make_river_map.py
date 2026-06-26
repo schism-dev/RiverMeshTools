@@ -1187,6 +1187,29 @@ def snap_closeby_points_global(pt_xyz: np.ndarray, snap_point_reso_ratio: float,
     return xyz, nsnap
 
 
+def point_to_candidate_segment_distances(points, candidate_segments):
+    """Calculate point-to-segment distances for preselected candidates.
+
+    ``points`` has shape ``(n_points, 2)`` and ``candidate_segments`` has
+    shape ``(n_points, n_candidates, 4)`` with columns x1, y1, x2, y2.
+    """
+    points = np.asarray(points, dtype=float)
+    candidate_segments = np.asarray(candidate_segments, dtype=float)
+
+    point_xy = points[:, None, :]
+    segment_start = candidate_segments[:, :, :2]
+    segment_delta = candidate_segments[:, :, 2:] - segment_start
+    length_squared = np.sum(segment_delta * segment_delta, axis=2)
+    projection = np.sum(
+        (point_xy - segment_start) * segment_delta,
+        axis=2,
+    ) / np.maximum(sys.float_info.epsilon, length_squared)
+    projection = np.clip(projection, 0.0, 1.0)
+    nearest_points = segment_start + projection[:, :, None] * segment_delta
+
+    return np.linalg.norm(point_xy - nearest_points, axis=2)
+
+
 def snap_closeby_lines_global(lines, snap_arc_reso_ratio):
     """
     Snap closeby lines to the same location.
@@ -1268,56 +1291,6 @@ def snap_points_to_lines(arc_points, snap_arc_reso):
     snap the point to the nearest segment if the distance is smaller than snap_arc_reso
     '''
 
-    # ------begin nested functions---------------------------
-    # Function to calculate distance between a point and a segment
-    # adapted from pylib
-    def mdist(xy, lxy):
-        '''
-        find the minimum distance of c_[x,y] to a set of lines lxy
-          lxy=c_[x1,y1,x2,y2]: each row is a line (x1,y1) -> (x2,y2)
-
-          output: minimum distance of each point to all lines (return a matrix)
-        '''
-
-        xy = np.atleast_2d(xy)
-        lxy = np.atleast_2d(lxy)
-        x, y = xy.T[:, :, None]
-        x1, y1, x2, y2 = lxy.T[:, None, :]
-
-        # initialize output
-        dist = np.nan * np.ones([x.size, x1.size])
-
-        # find if the foot of perpendicular exists on the line segment
-        k = -((x1-x)*(x2-x1)+(y1-y)*(y2-y1))/np.maximum(sys.float_info.epsilon, (x1-x2)**2+(y1-y2)**2)
-        xn = k * (x2 - x1) + x1
-        yn = k * (y2 - y1) + y1
-
-        # foot of perpendicular is on the line segment, calculate the distance in the standard way
-        fpn = (k >= 0) * (k <= 1)
-        dist[fpn] = abs((x+1j*y)-(xn+1j*yn))[fpn]  # pt-line dist
-
-        # foot of perpendicular is not on the line segment,
-        # calculate the distance to the nearest end point of the line segment
-        dist[~fpn] = np.array(
-            np.r_[abs((x+1j*y)-(x1+1j*y1))[None, ...], abs((x+1j*y)-(x2+1j*y2))[None, ...]]
-        ).min(axis=0)[~fpn]  # pt-pt dist
-
-        return dist
-
-    # Function to find approximate distances to nearest segments for a vertex
-    def find_nearest_distances_approx(points, segments, tree, n_nearest):
-        # Query the KD-tree for nearest segments within threshold
-        _, segment_indices = tree.query(points, k=n_nearest)
-
-        # Calculate distances for candidate segments
-        distances = np.zeros((len(points), n_nearest))
-        for i, [point, seg_ind] in enumerate(zip(points, segment_indices)):
-            candidate_segments = segments[seg_ind, :]
-            distances[i] = mdist(point, candidate_segments)
-
-        return distances
-    # ------end nested functions---------------------------
-
     points = arc_points.xy
 
     # split lines into segments (a segment only has two points)
@@ -1339,13 +1312,27 @@ def snap_points_to_lines(arc_points, snap_arc_reso):
     # build a kd-tree for faster querying
     tree = cKDTree(seg_midpoints)
     # 30 adjacent segs is enough in most cases
-    dists = find_nearest_distances_approx(points[:, :2], segs, tree, n_nearest=min(30, n_seg))
-    # dists is of shape (n_points, n_nearest)
-    dists = np.where(dists == 0, np.nan, dists)  # ignore zero distance, i.e., a point is a segment's endpoint
+    n_nearest = min(30, n_seg)
+    _, segment_indices = tree.query(points[:, :2], k=n_nearest)
+    if n_nearest == 1:
+        segment_indices = segment_indices[:, None]
 
-    # to-do: RuntimeWarning: All-NaN slice encountered
-    # the smallest non-zero distance of each row is the distance from that point to the nearest segment
-    dists = np.nanmin(dists, axis=1)
+    # Vectorize in chunks to avoid a large
+    # (n_points, n_nearest, segment_coordinates) temporary array.
+    dists = np.empty(len(points), dtype=float)
+    chunk_size = 50_000
+    for chunk_start in range(0, len(points), chunk_size):
+        chunk_end = min(chunk_start + chunk_size, len(points))
+        candidate_segments = segs[segment_indices[chunk_start:chunk_end]]
+        chunk_distances = point_to_candidate_segment_distances(
+            points[chunk_start:chunk_end, :2],
+            candidate_segments,
+        )
+        # Ignore zero distance, i.e., the point is a segment endpoint.
+        chunk_distances[chunk_distances == 0] = np.inf
+        dists[chunk_start:chunk_end] = np.min(chunk_distances, axis=1)
+
+    dists[np.isinf(dists)] = np.nan
     # nan is allowed in dists, because dists >= snap_arc_reso will be used to identify valid points
     target_pt_idx = dists >= snap_arc_reso  # identify valid points, which are not too close to any segment
     if not any(target_pt_idx):
@@ -1509,26 +1496,71 @@ def clean_arcs(arcs, snap_point_reso_ratio, snap_arc_reso_ratio, n_clean_iter=5)
 
     progressive_ratio = (np.arange(1, n_clean_iter+1) / n_clean_iter) ** 2  # small steps at the beginning
     progressive_ratio = np.r_[progressive_ratio, np.ones(10)]
+    timing_totals = {
+        'point snapping': 0.0,
+        'point union': 0.0,
+        'point-to-line snapping': 0.0,
+        'line union': 0.0,
+    }
 
     for i, pratio in enumerate(progressive_ratio):
         logger.info('-------------------Cleaning, Iteration %d -------------------', i+1)
+        iteration_start = time.perf_counter()
 
         # points close to each other
         ratio1 = snap_point_reso_ratio * pratio
         logger.info('Snapping nearby points: ratio1 = %s', ratio1)
+        stage_start = time.perf_counter()
         arc_points = Geoms_XY(geom_list=arcs, crs='epsg:4326', add_z=True)
         xyz, nsnap = snap_closeby_points_global(arc_points.xy, snap_point_reso_ratio=ratio1)
+        point_snapping_time = time.perf_counter() - stage_start
+        timing_totals['point snapping'] += point_snapping_time
         if nsnap == 0 and progressive_ratio[i] == max(progressive_ratio):  # no more snapping
+            logger.info(
+                'Cleaning iteration %d stopped after point snapping: %.3f s',
+                i + 1,
+                point_snapping_time,
+            )
             break
         arc_points.update_coords(xyz)
+        stage_start = time.perf_counter()
         arcs = union_line_geometries(arc_points.geom_list)
+        point_union_time = time.perf_counter() - stage_start
+        timing_totals['point union'] += point_union_time
 
         # points close to lines
         ratio2 = snap_arc_reso_ratio * pratio
         logger.info('Snapping points close to lines: ratio2 = %s', ratio2)
+        stage_start = time.perf_counter()
         arc_points = Geoms_XY(geom_list=arcs, crs='epsg:4326', add_z=True)
         arc_points = snap_points_to_lines(arc_points, snap_arc_reso=arc_points.xy[:, -1]*ratio2)
+        point_to_line_time = time.perf_counter() - stage_start
+        timing_totals['point-to-line snapping'] += point_to_line_time
+        stage_start = time.perf_counter()
         arcs = union_line_geometries(arc_points.geom_list)
+        line_union_time = time.perf_counter() - stage_start
+        timing_totals['line union'] += line_union_time
+
+        logger.info(
+            'Cleaning iteration %d timings: point snapping %.3f s, '
+            'point union %.3f s, point-to-line snapping %.3f s, '
+            'line union %.3f s, total %.3f s',
+            i + 1,
+            point_snapping_time,
+            point_union_time,
+            point_to_line_time,
+            line_union_time,
+            time.perf_counter() - iteration_start,
+        )
+
+    logger.info(
+        'Cleaning stage totals: point snapping %.3f s, point union %.3f s, '
+        'point-to-line snapping %.3f s, line union %.3f s',
+        timing_totals['point snapping'],
+        timing_totals['point union'],
+        timing_totals['point-to-line snapping'],
+        timing_totals['line union'],
+    )
 
     return arcs
 
