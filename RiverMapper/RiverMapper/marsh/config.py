@@ -27,9 +27,11 @@ class MarshConfig:
     discard_remaining_small_parts: bool = True
 
     # RiverMapper design and paving parameters.
-    X2: float = 10.0
-    Y: float = 10.0
-    Z: float = 30.0
+    boundary_buffer_distance: float = 10.0
+    along_boundary_resolution: float = 10.0
+    skinny_centerline_spacing: float = 10.0
+    default_fleshy_paving_resolution: float = 30.0
+    boundary_vertex_spacing: float = 2.0
     fleshy_resolution_threshold: float = 30.0
     small_fleshy_resolution_factor: float = 0.4
 
@@ -39,6 +41,10 @@ class MarshConfig:
     skeleton_random_seed: int = 0
     min_skeleton_line_length: float = 0.0
     diagnostic_min_area: float = 0.0
+
+    # Optional final-product thinning.  None disables the filter.
+    min_skinny_width_m: float | None = None
+    min_fleshy_area_m2: float | None = None
 
     @property
     def effective_fleshy_core_dist(self):
@@ -50,9 +56,13 @@ class MarshConfig:
         positive = {
             "skinny_full_width_threshold": self.skinny_full_width_threshold,
             "fleshy_core_dist": self.effective_fleshy_core_dist,
-            "X2": self.X2,
-            "Y": self.Y,
-            "Z": self.Z,
+            "boundary_buffer_distance": self.boundary_buffer_distance,
+            "along_boundary_resolution": self.along_boundary_resolution,
+            "skinny_centerline_spacing": self.skinny_centerline_spacing,
+            "default_fleshy_paving_resolution": (
+                self.default_fleshy_paving_resolution
+            ),
+            "boundary_vertex_spacing": self.boundary_vertex_spacing,
             "skeleton_dx": self.skeleton_dx,
             "skeleton_vertex_spacing": self.skeleton_vertex_spacing,
         }
@@ -70,6 +80,14 @@ class MarshConfig:
         }
         for name, value in nonnegative.items():
             if value < 0:
+                raise ValueError(f"{name} must be nonnegative; got {value}")
+
+        optional_nonnegative = {
+            "min_skinny_width_m": self.min_skinny_width_m,
+            "min_fleshy_area_m2": self.min_fleshy_area_m2,
+        }
+        for name, value in optional_nonnegative.items():
+            if value is not None and value < 0:
                 raise ValueError(f"{name} must be nonnegative; got {value}")
 
         cleanup_modes = {"direct_discard", "iterative"}
@@ -143,7 +161,22 @@ def make_config(recipe="standard", values=None):
         )
 
     updates = dict(RECIPE_OVERRIDES[recipe])
-    updates.update(values or {})
+    supplied = dict(values or {})
+
+    # Compatibility with recipes written before the descriptive renaming.
+    if "X2" in supplied:
+        x2 = supplied.pop("X2")
+        supplied.setdefault("boundary_buffer_distance", x2)
+        supplied.setdefault("along_boundary_resolution", x2)
+    legacy_names = {
+        "Y": "skinny_centerline_spacing",
+        "Z": "default_fleshy_paving_resolution",
+    }
+    for old_name, new_name in legacy_names.items():
+        if old_name in supplied:
+            supplied.setdefault(new_name, supplied.pop(old_name))
+
+    updates.update(supplied)
     valid_names = {field.name for field in fields(MarshConfig)}
     unknown = sorted(set(updates) - valid_names)
     if unknown:

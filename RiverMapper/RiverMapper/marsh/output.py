@@ -5,8 +5,35 @@ from pathlib import Path
 import geopandas as gpd
 import numpy as np
 import pandas as pd
+from pyproj import Transformer
+from shapely.ops import transform as transform_geometry
 
 from .geometry import clean_geom, explode_to_lines, resample_linestring
+
+
+ARC_LAYER_SPECS = (
+    {
+        "layer": "fleshy_boundary_lines",
+        "record_key": "fleshy_boundary_lines",
+        "arc_pos": "regular",
+        "dummy": 0,
+        "spacing_parameter": "boundary_vertex_spacing",
+    },
+    {
+        "layer": "skinny_boundary_lines",
+        "record_key": "skinny_boundary_lines",
+        "arc_pos": "left half",
+        "dummy": 0,
+        "spacing_parameter": "boundary_vertex_spacing",
+    },
+    {
+        "layer": "skinny_skeleton_lines",
+        "record_key": "skeleton_lines",
+        "arc_pos": "dummy",
+        "dummy": 1,
+        "spacing_parameter": "skinny_centerline_spacing",
+    },
+)
 
 
 def make_output_gdfs(original_gdf, records):
@@ -205,80 +232,30 @@ def print_summary(gdfs, output_file):
     print("  skeleton vertex D = distance to nearest skinny polygon boundary.")
 
 
-def extract_arc_lines_from_decomposed_gpkg(
-    decomposed_gpkg,
-    output_file,
-    config,
-    output_crs="EPSG:4326",
-):
+def make_arc_line_records(records, config):
+    """Build RiverMapper arc-line records from in-memory decomposition records.
+
+    This is the fast path used by the MPI workflow.  Each rank can resample
+    its own boundary/skeleton records before rank 0 writes the final datasets.
     """
-    Extract arc lines from decomposed marsh GPKG.
+    arc_records = []
 
-    Input layers are assumed to already be LineString/MultiLineString:
-        fleshy_boundary_lines      -> arc_pos = "regular",   dummy = 0
-        skinny_boundary_lines      -> arc_pos = "left half", dummy = 0
-        skinny_skeleton_lines      -> arc_pos = "dummy",     dummy = 1
-
-    Skeleton lines are resampled with spacing Y in the projected source CRS.
-
-    All available attributes from source layers are preserved.
-    Output is reprojected to output_crs before writing.
-    """
-
-    decomposed_gpkg = Path(decomposed_gpkg)
-    output_file = Path(output_file)
-
-    layer_specs = [
-        {
-            "layer": "fleshy_boundary_lines",
-            "arc_pos": "regular",
-            "dummy": 0,
-            "resample": 0.2 * config.Y,
-        },
-        {
-            "layer": "skinny_boundary_lines",
-            "arc_pos": "left half",
-            "dummy": 0,
-            "resample": 0.2 * config.Y,
-        },
-        {
-            "layer": "skinny_skeleton_lines",
-            "arc_pos": "dummy",
-            "dummy": 1,
-            "resample": config.Y,
-        },
-    ]
-
-    def read_layer(layer):
-        try:
-            return gpd.read_file(decomposed_gpkg, layer=layer)
-        except Exception as exc:
-            print(f"Warning: could not read layer {layer!r}: {exc}")
-            return None
-
-    records = []
-    crs = None
-
-    for spec in layer_specs:
+    for spec in ARC_LAYER_SPECS:
         layer_name = spec["layer"]
+        record_key = spec["record_key"]
         arc_pos = spec["arc_pos"]
         dummy = spec["dummy"]
-        resample = spec["resample"]
+        resample = getattr(config, spec["spacing_parameter"])
         resample = resample if resample is not None and resample > 0 else None
 
-        gdf = read_layer(layer_name)
+        for source_record in records.get(record_key, []):
+            attrs = {
+                name: value
+                for name, value in source_record.items()
+                if name != "geometry"
+            }
 
-        if gdf is None or gdf.empty:
-            print(f"Warning: missing or empty layer: {layer_name}")
-            continue
-
-        if crs is None:
-            crs = gdf.crs
-
-        for _, row in gdf.iterrows():
-            attrs = row.drop(labels="geometry").to_dict()
-
-            for line in explode_to_lines(row.geometry):
+            for line in explode_to_lines(source_record["geometry"]):
                 line = clean_geom(line)
 
                 if line is None or line.is_empty or line.length <= 0:
@@ -296,44 +273,197 @@ def extract_arc_lines_from_decomposed_gpkg(
                 rec["arc_pos"] = arc_pos
                 rec["dummy"] = dummy
                 rec["length_m"] = line.length
-                rec["resampled"] = (
-                    bool(resample) if resample is not None else False
-                )
+                rec["resampled"] = "T" if resample is not None else "F"
                 rec["resamp_m"] = (
                     float(resample) if resample is not None else np.nan
                 )
                 rec["geometry"] = line
 
-                records.append(rec)
+                arc_records.append(rec)
+
+    return arc_records
+
+
+def arc_sort_key(record):
+    """Stable sorting key for reproducible arc-line output."""
+    return (
+        record.get("parent_id", -1),
+        record.get("src_layer", ""),
+        record.get("skinny_id", -1),
+        record.get("fleshy_id", -1),
+        record.get("part_id", -1),
+        record.get("line_id", -1),
+        record.get("branch_id", -1),
+    )
+
+
+def write_arc_lines(gdf, filename):
+    """Replace one arc-line dataset and report its CRS."""
+    filename = Path(filename)
+
+    if filename.exists():
+        if filename.suffix.lower() == ".shp":
+            for suffix in [".shp", ".shx", ".dbf", ".prj", ".cpg"]:
+                f = filename.with_suffix(suffix)
+                if f.exists():
+                    f.unlink()
+        else:
+            filename.unlink()
+
+    if filename.suffix.lower() == ".shp":
+        gdf.to_file(filename, driver="ESRI Shapefile")
+    else:
+        gdf.to_file(filename, layer="arc_lines", driver="GPKG")
+
+    print(f"Saved: {filename}")
+    print(f"Output CRS: {gdf.crs}")
+
+
+def write_arc_line_gdf(source_gdf, output_file, output_crs="EPSG:4326"):
+    """Write source-CRS and optional reprojected RiverMapper arc lines."""
+    output_file = Path(output_file)
+
+    if source_gdf.empty:
+        raise ValueError("No line features generated.")
+
+    if output_file.stem.endswith("_arc_lines"):
+        original_crs_stem = (
+            output_file.stem.removesuffix("_arc_lines")
+            + "_arc_line_original_crs"
+        )
+    else:
+        original_crs_stem = output_file.stem + "_arc_line_original_crs"
+    original_crs_output_file = output_file.with_name(
+        original_crs_stem + output_file.suffix
+    )
+
+    # Write coordinates exactly as constructed in the input projected CRS.
+    write_arc_lines(source_gdf, original_crs_output_file)
+
+    value_columns = ["src_layer", "arc_pos", "dummy", "resampled"]
+    print(source_gdf[value_columns].value_counts())
+
+    if output_crs is None:
+        output_gdf = source_gdf
+    else:
+        # Keep reprojection isolated at the end so source-coordinate output
+        # and any datum displacement can be inspected independently.
+        transformer = Transformer.from_crs(
+            source_gdf.crs,
+            output_crs,
+            always_xy=True,
+        )
+        geometries = [
+            transform_geometry(transformer.transform, geometry)
+            for geometry in source_gdf.geometry
+        ]
+        output_gdf = source_gdf.copy()
+        output_gdf = output_gdf.set_geometry(
+            gpd.GeoSeries(
+                geometries,
+                index=source_gdf.index,
+                crs=output_crs,
+            )
+        )
+
+        operation = transformer.get_last_used_operation()
+        print(f"Selected operation: {operation.description}")
+        print(f"Selected pipeline: {operation.to_proj4()}")
+
+        roundtrip_gdf = output_gdf.to_crs(source_gdf.crs)
+        errors = source_gdf.geometry.hausdorff_distance(
+            roundtrip_gdf.geometry
+        )
+        print("Round-trip displacement statistics (source CRS units):")
+        print(errors.describe())
+        print(
+            "Maximum round-trip displacement: "
+            f"{errors.max():.12g} m"
+        )
+
+    write_arc_lines(output_gdf, output_file)
+
+    return output_gdf
+
+
+def write_arc_line_records(
+    records,
+    crs,
+    output_file,
+    output_crs="EPSG:4326",
+):
+    """Write arc-line records collected from one or more MPI ranks."""
+    records = sorted(records, key=arc_sort_key)
+    source_gdf = gpd.GeoDataFrame(records, geometry="geometry", crs=crs)
+    return write_arc_line_gdf(
+        source_gdf=source_gdf,
+        output_file=output_file,
+        output_crs=output_crs,
+    )
+
+
+def extract_arc_lines_from_decomposed_gpkg(
+    decomposed_gpkg,
+    output_file,
+    config,
+    output_crs="EPSG:4326",
+):
+    """
+    Extract arc lines from decomposed marsh GPKG.
+
+    Input layers are assumed to already be LineString/MultiLineString:
+        fleshy_boundary_lines      -> arc_pos = "regular",   dummy = 0
+        skinny_boundary_lines      -> arc_pos = "left half", dummy = 0
+        skinny_skeleton_lines      -> arc_pos = "dummy",     dummy = 1
+
+    Boundary lines use ``boundary_vertex_spacing``. Skeleton lines use
+    ``skinny_centerline_spacing``.
+
+    All available attributes from source layers are preserved.  Two copies
+    are always written:
+
+    * ``*_arc_line_original_crs`` always retains the source CRS.
+    * The requested ``*_arc_lines`` output uses ``output_crs`` when provided,
+      or retains the source CRS when ``output_crs`` is ``None``.
+    """
+
+    decomposed_gpkg = Path(decomposed_gpkg)
+
+    def read_layer(layer):
+        try:
+            return gpd.read_file(decomposed_gpkg, layer=layer)
+        except Exception as exc:
+            print(f"Warning: could not read layer {layer!r}: {exc}")
+            return None
+
+    source_records = {
+        spec["record_key"]: []
+        for spec in ARC_LAYER_SPECS
+    }
+    crs = None
+
+    for spec in ARC_LAYER_SPECS:
+        layer_name = spec["layer"]
+        gdf = read_layer(layer_name)
+
+        if gdf is None or gdf.empty:
+            print(f"Warning: missing or empty layer: {layer_name}")
+            continue
+
+        if crs is None:
+            crs = gdf.crs
+
+        for _, row in gdf.iterrows():
+            rec = row.drop(labels="geometry").to_dict()
+            rec["geometry"] = row.geometry
+            source_records[spec["record_key"]].append(rec)
 
     if crs is None:
         raise ValueError("No valid input LineString layers found.")
 
-    if len(records) == 0:
-        raise ValueError("No line features generated.")
-
-    out_gdf = gpd.GeoDataFrame(records, geometry="geometry", crs=crs)
-
-    if output_crs is not None:
-        out_gdf = out_gdf.to_crs(output_crs)
-
-    if output_file.exists():
-        if output_file.suffix.lower() == ".shp":
-            for suffix in [".shp", ".shx", ".dbf", ".prj", ".cpg"]:
-                f = output_file.with_suffix(suffix)
-                if f.exists():
-                    f.unlink()
-        else:
-            output_file.unlink()
-
-    if output_file.suffix.lower() == ".shp":
-        out_gdf.to_file(output_file, driver="ESRI Shapefile")
-    else:
-        out_gdf.to_file(output_file, layer="arc_lines", driver="GPKG")
-
-    print(f"Saved: {output_file}")
-    print(f"Output CRS: {out_gdf.crs}")
-    value_columns = ["src_layer", "arc_pos", "dummy", "resampled"]
-    print(out_gdf[value_columns].value_counts())
-
-    return out_gdf
+    return write_arc_line_records(
+        records=make_arc_line_records(source_records, config),
+        crs=crs,
+        output_file=output_file,
+        output_crs=output_crs,
+    )

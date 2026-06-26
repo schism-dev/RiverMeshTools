@@ -273,12 +273,12 @@ def cleanup_iterative(original_poly, candidate_skinny_raw_parts, config):
 def fleshy_paving_resolution(min_dim, config):
     """Return paving resolution for a fleshy polygon."""
     if not np.isfinite(min_dim):
-        return config.Z
+        return config.default_fleshy_paving_resolution
 
     if min_dim < config.fleshy_resolution_threshold:
         return config.small_fleshy_resolution_factor * min_dim
 
-    return config.Z
+    return config.default_fleshy_paving_resolution
 
 
 def decompose_marsh_polygon(original_poly, config):

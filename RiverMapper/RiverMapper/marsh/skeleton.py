@@ -283,6 +283,21 @@ def skeletonize_skinny_polygon(poly, parent_id, skinny_id, config):
                     "D_min": float(np.min(d_values)) if d_values else np.nan,
                     "D_mean": float(np.mean(d_values)) if d_values else np.nan,
                     "D_max": float(np.max(d_values)) if d_values else np.nan,
+                    "width_min_m": (
+                        float(2.0 * np.min(d_values))
+                        if d_values
+                        else np.nan
+                    ),
+                    "width_mean_m": (
+                        float(2.0 * np.mean(d_values))
+                        if d_values
+                        else np.nan
+                    ),
+                    "width_max_m": (
+                        float(2.0 * np.max(d_values))
+                        if d_values
+                        else np.nan
+                    ),
                     "geometry": line_piece,
                 }
             )

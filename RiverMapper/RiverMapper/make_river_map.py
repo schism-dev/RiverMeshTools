@@ -1029,9 +1029,9 @@ def set_inner_arc_position(nrow_arcs, position_type='regular'):
     elif position_type == 'fake':  # default levee
         inner_arc_position = np.array([0.0, 6.75, 11.25, 18.0]) / 18
     elif position_type == 'left half':
-        inner_arc_position = np.linspace(0.0, 0.5, round(nrow_arcs/2))
+        inner_arc_position = np.linspace(0.0, 0.5, (nrow_arcs+1)//2)  # half of the arcs and round up
     elif position_type == 'right half':
-        inner_arc_position = np.linspace(0.5, 1.0, round(nrow_arcs/2))
+        inner_arc_position = np.linspace(0.5, 1.0, (nrow_arcs+1)//2)  # half of the arcs and round up
     elif position_type == 'toward_center':  # denser near center
         raise NotImplementedError('toward_center not implemented')
     elif position_type == 'toward_banks':  # denser near banks

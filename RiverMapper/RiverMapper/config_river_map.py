@@ -78,6 +78,7 @@ class ConfigRiverMap():
         i_DiagnosticOutput=DEFAULT_i_DiagnosticOutput,
         i_pseudo_channel=DEFAULT_i_pseudo_channel,
         pseudo_channel_width=DEFAULT_pseudo_channel_width,
+        pseudo_channel_dl=DEFAULT_pseudo_channel_dl,
         nrow_pseudo_channel=DEFAULT_nrow_pseudo_channel,
         dry_run_only=DEFAULT_dry_run_only,
     ):
@@ -161,6 +162,36 @@ class ConfigRiverMap():
             nrow_pseudo_channel=4, length_width_ratio=80.0,
             snap_point_reso_ratio=0.1, snap_arc_reso_ratio=0.1,
             i_smooth_banks=False, i_DiagnosticOutput=True, n_clean_iter=3,
+        )
+
+    @classmethod
+    def Marsh_coarsen_2(cls):
+        '''
+        Similar to levees, but more divisions perpendicular to the marsh boundary lines
+        (equivalent to levee centerlines) and finer resolution in general
+
+        '''
+        return cls(
+            i_pseudo_channel=3, pseudo_channel_width=20,
+            nrow_pseudo_channel=5, length_width_ratio=5,
+            along_channel_reso_thres=(4, 23),
+            snap_point_reso_ratio=0.15, snap_arc_reso_ratio=0.15,
+            i_smooth_banks=True, i_DiagnosticOutput=True, n_clean_iter=3,
+        )
+
+    @classmethod
+    def Marsh_coarsen_1(cls):
+        '''
+        Similar to levees, but more divisions perpendicular to the marsh boundary lines
+        (equivalent to levee centerlines) and finer resolution in general
+
+        '''
+        return cls(
+            i_pseudo_channel=3, pseudo_channel_width=20,
+            nrow_pseudo_channel=5, length_width_ratio=30, R_coef=1.2,
+            along_channel_reso_thres=(15, 25),
+            snap_point_reso_ratio=0.15, snap_arc_reso_ratio=0.15,
+            i_smooth_banks=True, i_DiagnosticOutput=True, n_clean_iter=3,
         )
 
     @classmethod

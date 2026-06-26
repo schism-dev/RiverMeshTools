@@ -17,9 +17,15 @@ from pathlib import Path
 import unittest
 
 from shapely import wkt
+from shapely.geometry import LineString
 from shapely.ops import unary_union
 
 from RiverMapper import marsh
+from RiverMapper.marsh.output import ARC_LAYER_SPECS, make_arc_line_records
+from RiverMapper.marsh.workflow import (
+    average_skeleton_width,
+    filter_final_fleshy_parts,
+)
 
 
 BASELINE_PATH = (
@@ -135,6 +141,50 @@ class TestMarshDecompositionRegression(unittest.TestCase):
 
         self.assertIn("direct_discard excluded", output.getvalue())
 
+    def test_arc_line_classification_matches_rivermapper_schema(self):
+        classifications = {
+            spec["layer"]: (spec["arc_pos"], spec["dummy"])
+            for spec in ARC_LAYER_SPECS
+        }
+
+        self.assertEqual(
+            classifications,
+            {
+                "fleshy_boundary_lines": ("regular", 0),
+                "skinny_boundary_lines": ("left half", 0),
+                "skinny_skeleton_lines": ("dummy", 1),
+            },
+        )
+
+    def test_arc_line_records_can_be_built_from_memory(self):
+        records = {
+            "fleshy_boundary_lines": [
+                {"parent_id": 0, "geometry": LineString([(0, 0), (4, 0)])}
+            ],
+            "skinny_boundary_lines": [
+                {"parent_id": 0, "geometry": LineString([(0, 1), (4, 1)])}
+            ],
+            "skeleton_lines": [
+                {"parent_id": 0, "geometry": LineString([(0, 2), (4, 2)])}
+            ],
+        }
+
+        arc_records = make_arc_line_records(records, self.config)
+        classes = {
+            record["src_layer"]: (record["arc_pos"], record["dummy"])
+            for record in arc_records
+        }
+
+        self.assertEqual(
+            classes,
+            {
+                "fleshy_boundary_lines": ("regular", 0),
+                "skinny_boundary_lines": ("left half", 0),
+                "skinny_skeleton_lines": ("dummy", 1),
+            },
+        )
+        self.assertTrue(all(r["resampled"] == "T" for r in arc_records))
+
     def test_recipe_can_be_overridden_without_mutating_it(self):
         config = self.module.make_config(
             "fast_preview",
@@ -148,6 +198,17 @@ class TestMarshDecompositionRegression(unittest.TestCase):
             self.module.make_config("fast_preview").filter_dist,
             5.0,
         )
+
+    def test_legacy_xyz_parameter_names_are_supported(self):
+        config = self.module.make_config(
+            "standard",
+            {"X2": 12.0, "Y": 14.0, "Z": 40.0},
+        )
+
+        self.assertEqual(config.boundary_buffer_distance, 12.0)
+        self.assertEqual(config.along_boundary_resolution, 12.0)
+        self.assertEqual(config.skinny_centerline_spacing, 14.0)
+        self.assertEqual(config.default_fleshy_paving_resolution, 40.0)
 
     def test_run_files_are_separate_from_recipe_parameters(self):
         self.assertFalse(hasattr(self.config, "input_file"))
@@ -175,6 +236,44 @@ class TestMarshDecompositionRegression(unittest.TestCase):
             "Unknown configuration parameter",
         ):
             self.module.make_config("standard", {"skeleton_resolution": 1.0})
+
+    def test_optional_final_product_filters_drop_small_fleshy_outputs(self):
+        layers = self.decompose()
+        config = self.module.make_config(
+            "standard",
+            {"min_fleshy_area_m2": 1.0e6},
+        )
+
+        fleshy, dropped_fleshy = (
+            filter_final_fleshy_parts(layers["fleshy"], config)
+        )
+
+        self.assertEqual(fleshy, [])
+        self.assertEqual(len(dropped_fleshy), len(layers["fleshy"]))
+
+    def test_fleshy_final_product_filter_is_disabled_by_default(self):
+        layers = self.decompose()
+
+        fleshy, dropped_fleshy = (
+            filter_final_fleshy_parts(layers["fleshy"], self.config)
+        )
+
+        self.assertEqual(fleshy, layers["fleshy"])
+        self.assertEqual(dropped_fleshy, [])
+
+    def test_average_skeleton_width_uses_length_weighted_full_width(self):
+        width = average_skeleton_width(
+            [
+                {"D_mean": 2.0, "length_m": 10.0},
+                {"D_mean": 4.0, "length_m": 30.0},
+            ],
+            fallback_width=99.0,
+        )
+
+        self.assertAlmostEqual(width, 7.0)
+
+    def test_average_skeleton_width_falls_back_without_skeleton_lines(self):
+        self.assertEqual(average_skeleton_width([], fallback_width=5.0), 5.0)
 
 
 if __name__ == "__main__":

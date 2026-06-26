@@ -10,7 +10,11 @@
     "small_fleshy_area_ratio": 0.01,
     "small_polygon_cleanup_mode": "direct_discard",
     "diagnostic_min_area": 0.0,
-    "buffer_join_style": 1
+    "buffer_join_style": 1,
+    "boundary_buffer_distance": 10.0,
+    "along_boundary_resolution": 10.0,
+    "skinny_centerline_spacing": 10.0,
+    "default_fleshy_paving_resolution": 30.0
   },
   "expected": {
     "fleshy": {
