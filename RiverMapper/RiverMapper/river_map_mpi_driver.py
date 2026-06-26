@@ -25,7 +25,13 @@ import geopandas as gpd
 from RiverMapper.config_logger import logger
 from RiverMapper.config_river_map import ConfigRiverMap
 from RiverMapper.river_map_tif_preproc import find_thalweg_tile, Tif2XYZ
-from RiverMapper.make_river_map import make_river_map, geos2SmsArcList, clean_arcs, output_ocsmesh
+from RiverMapper.make_river_map import (
+    clean_arcs,
+    geos2SmsArcList,
+    make_river_map,
+    output_ocsmesh,
+    union_line_geometries,
+)
 from RiverMapper.SMS import merge_maps, SMS_MAP, get_all_points_from_shp
 from RiverMapper.util import silentremove
 
@@ -321,15 +327,7 @@ def river_map_mpi_driver(
             logger.info('\n--------------- Final clean-ups --------------------------------------------------------\n')
             time_final_cleanup_start = time.time()
 
-            arc_union = total_arcs_map.to_GeoDataFrame().geometry.unary_union
-            if arc_union.geom_type == "LineString":
-                arc_list = [arc_union]
-            elif arc_union.geom_type == "MultiLineString":
-                arc_list = list(arc_union.geoms)
-            elif arc_union.geom_type == "GeometryCollection":
-                arc_list = [g for g in arc_union.geoms if g.geom_type == "LineString"]
-            else:
-                raise TypeError(f"Unexpected arc union geometry type: {arc_union.geom_type}")
+            arc_list = union_line_geometries(total_arcs_map.to_LineStringList())
 
             total_arcs_cleaned = clean_arcs(
                 arc_list,

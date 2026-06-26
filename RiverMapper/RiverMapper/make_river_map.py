@@ -32,7 +32,7 @@ from scipy.stats import zscore
 from scipy.spatial import cKDTree, KDTree
 from scipy.ndimage import gaussian_filter1d
 import shapely
-from shapely.geometry import LineString, Point
+from shapely.geometry import GeometryCollection, LineString, MultiLineString, Point
 from shapely.ops import polygonize, unary_union
 from shapely.validation import explain_validity
 from rtree import index
@@ -498,20 +498,47 @@ def snap_vertices(line, resolution):
     return line
 
 
-def gdf2arclist(gdf):
-    '''Convert a geopandas dataframe of LineStrings to a list of LineString objects'''
-    uu = gdf.unary_union
+def line_geometries_from_union(geometry):
+    """Return LineString parts from a Shapely overlay result."""
+    if geometry.is_empty:
+        return []
+    if isinstance(geometry, LineString):
+        return [geometry]
+    if isinstance(geometry, MultiLineString):
+        return [arc for arc in geometry.geoms]
+    if isinstance(geometry, GeometryCollection):
+        return [
+            arc
+            for part in geometry.geoms
+            if isinstance(part, (LineString, MultiLineString))
+            for arc in (
+                part.geoms if isinstance(part, MultiLineString) else [part]
+            )
+        ]
+
+    raise TypeError(f'Unexpected geometry type after cleaning: {geometry.geom_type}')
+
+
+def union_line_geometries(arcs):
+    """Node and dissolve linework, returning a flat LineString list."""
+    if len(arcs) == 0:
+        logger.warning('Warning: No arcs left after cleaning')
+        return []
+
+    uu = unary_union(arcs)
     if uu.is_empty:
         logger.warning('Warning: No arcs left after cleaning')
         return []
-    elif uu.geom_type == 'LineString':
+    elif isinstance(uu, LineString):
         logger.warning('Warning: Only one arc left after cleaning')
         return [uu]
-    elif uu.geom_type == 'MultiLineString':
-        arcs = [arc for arc in uu.geoms]
-    else:
-        raise TypeError('Unexpected geometry type after cleaning')
-    return arcs
+
+    return line_geometries_from_union(uu)
+
+
+def gdf2arclist(gdf):
+    '''Convert a geopandas dataframe of LineStrings to a list of LineString objects'''
+    return union_line_geometries(gdf.geometry.to_list())
 
 
 def geos2SmsArcList(geoms=None):
@@ -1494,18 +1521,14 @@ def clean_arcs(arcs, snap_point_reso_ratio, snap_arc_reso_ratio, n_clean_iter=5)
         if nsnap == 0 and progressive_ratio[i] == max(progressive_ratio):  # no more snapping
             break
         arc_points.update_coords(xyz)
-        arcs_gdf = gpd.GeoDataFrame({'index': range(len(arcs)), 'geometry': arc_points.geom_list})
-
-        arcs = gdf2arclist(arcs_gdf)
+        arcs = union_line_geometries(arc_points.geom_list)
 
         # points close to lines
         ratio2 = snap_arc_reso_ratio * pratio
         logger.info('Snapping points close to lines: ratio2 = %s', ratio2)
         arc_points = Geoms_XY(geom_list=arcs, crs='epsg:4326', add_z=True)
         arc_points = snap_points_to_lines(arc_points, snap_arc_reso=arc_points.xy[:, -1]*ratio2)
-        arcs_gdf = gpd.GeoDataFrame({'index': range(len(arcs)), 'geometry': arc_points.geom_list})
-
-        arcs = gdf2arclist(arcs_gdf)
+        arcs = union_line_geometries(arc_points.geom_list)
 
     return arcs
 
