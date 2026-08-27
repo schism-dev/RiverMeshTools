@@ -1,11 +1,8 @@
-"""
-This script provides classes and methods for processing tif files.
-"""
+"""Raster reading, sampling, caching, and tile-grouping helpers for RiverMapper."""
 
 
 import os
 from glob import glob
-from pathlib import Path
 import errno
 import copy
 import pickle
@@ -15,11 +12,6 @@ from dataclasses import dataclass
 
 import numpy as np
 from osgeo import gdal
-import geopandas as gpd
-from shapely import Polygon
-import rasterio
-from rasterio.features import rasterize
-from rasterio.transform import from_origin
 
 from RiverMapper.SMS import lonlat2cpp, cpp2lonlat, get_all_points_from_shp
 from RiverMapper.util import silentremove
@@ -40,94 +32,6 @@ class DemData():
     elev: np.ndarray
     dx: float
     dy: float
-
-
-def gen_splitter(dem_box, dl, overlap_ratio=0.01, crs='EPSG:4326'):
-    '''
-    Generate a splitter for splitting a large DEM file into smaller tiles
-
-    Input:
-    - dem_box: bounding box of the DEM file, [xmin, ymin, xmax, ymax]
-    - dl: side length of each square tile
-    - overlap_ratio: overlap ratio between tiles
-
-    Output:
-    - splitter: list of bounding boxes of tiles
-    '''
-    splitter = []
-    for x in np.arange(dem_box[0], dem_box[2], dl):
-        for y in np.arange(dem_box[1], dem_box[3], dl):
-            splitter.append([
-                x - dl * overlap_ratio, y - dl * overlap_ratio,
-                x + dl + dl * overlap_ratio, y + dl + dl * overlap_ratio
-            ])
-
-    # make a gpd dataframe for the splitter
-    gdf = gpd.GeoDataFrame(
-        geometry=[Polygon([(x[0], x[1]), (x[2], x[1]), (x[2], x[3]), (x[0], x[3])]) for x in splitter], crs=crs)
-
-    return splitter, gdf
-
-
-def split_vector_shp(shp_fname, splitter_gdf, outdir='./split/'):
-    '''
-    Split a vector shapefile into smaller tiles
-
-    Inputs:
-    - shp_fname: input shapefile name, consisting vectors such as linestrings or polygons
-    - splitter_gdf: a GeoDataFrame of bounding boxes of tiles
-    - outdir: output directory
-    '''
-
-    shp_fname = Path(shp_fname)
-    outdir = Path(outdir)
-    outdir.mkdir(parents=True, exist_ok=True)
-
-    input_shp_gdf = gpd.read_file(shp_fname)
-
-    split_shp_fnames = []
-    for i, splitter in enumerate(splitter_gdf.geometry):
-        clipped_gdf = gpd.clip(input_shp_gdf, splitter)
-        if clipped_gdf.empty:
-            print(f'skip empty tile {i}')
-            continue
-        split_shp_fnames.append(f'{outdir}/{shp_fname.stem}_{i}.shp')
-        clipped_gdf.to_file(split_shp_fnames[-1])
-
-    return split_shp_fnames
-
-
-def rasterize_shp(shp_fname, burn_value=-1, pixel_size=2e-5):
-    '''
-    Rasterize a shapefile into a tif file
-
-    Inputs:
-    -burn_value: value to burn into the rasterized tif file
-    -dl: resolution of the tif file in degrees
-    '''
-    shp_fname = Path(shp_fname)
-
-    gdf = gpd.read_file(shp_fname)
-
-    # Define raster properties
-    minx, miny, maxx, maxy = gdf.total_bounds  # Get the bounding box of the shapefile
-    width = int((maxx - minx) / pixel_size)
-    height = int((maxy - miny) / pixel_size)
-    transform = from_origin(minx, maxy, pixel_size, pixel_size)  # Transform for rasterization
-
-    # Prepare a list of geometries and values
-    shapes = [(geom, burn_value) for geom in gdf.geometry]  # Inside value is -1
-
-    # Rasterize the polygons
-    raster = rasterize(
-        shapes, out_shape=(height, width), transform=transform, fill=0, dtype='int16')
-
-    # Save the raster to a file
-    with rasterio.open(
-        shp_fname.with_suffix(".tif"), 'w', driver='GTiff', height=height, width=width,
-        count=1, dtype='int16', crs=gdf.crs, transform=transform,
-    ) as dst:
-        dst.write(raster, 1)
 
 
 def parse_dem_tiles(dem_code, dem_tile_digits):
@@ -468,78 +372,3 @@ def find_thalweg_tile(
     # plt.show()
 
     return thalweg2large_group, large_groups_files, np.array(large_group2thalwegs, dtype=object)
-
-
-def create_dummy_tif(output_path, bounds, pixel_size=1.0, value=0, dtype='uint8'):
-    """
-    Create a dummy GeoTIFF with constant value over a defined bounding box.
-
-    Parameters:
-        output_path (str): Path to save the GeoTIFF.
-        bounds (tuple): Bounding box in (min_lon, min_lat, max_lon, max_lat).
-        pixel_size (float): Resolution in degrees per pixel (default 1.0).
-        value (int or float): Constant value to fill (default 0).
-        dtype (str): Data type of the raster values (default 'uint8').
-
-    Returns:
-        str: Path to the created GeoTIFF.
-    """
-    min_lon, min_lat, max_lon, max_lat = bounds
-
-    width = int(np.ceil((max_lon - min_lon) / pixel_size))
-    height = int(np.ceil((max_lat - min_lat) / pixel_size))
-
-    transform = from_origin(min_lon, max_lat, pixel_size, pixel_size)
-
-    data = np.full((height, width), value, dtype=dtype)
-
-    meta = {
-        'driver': 'GTiff',
-        'height': height,
-        'width': width,
-        'count': 1,
-        'dtype': dtype,
-        'crs': 'EPSG:4326',
-        'transform': transform
-    }
-
-    os.makedirs(os.path.dirname(output_path), exist_ok=True)
-    with rasterio.open(output_path, 'w', **meta) as dst:
-        dst.write(data, 1)
-
-    return output_path
-
-
-def sample_rasterize_polygons(input_shp_fname, outdir=None):
-    '''
-    Make a splitter shapefile for splitting a large raster/vector shapefile into smaller tiles.
-    Then split the large shapefile into smaller tiles.
-    Finally, rasterize the smaller shapefiles into tif files.
-    '''
-    if outdir is None:
-        outdir = Path(f'{input_shp_fname.parent}/{input_shp_fname.stem}_split_rasterized/')
-    outdir.mkdir(parents=True, exist_ok=True)
-
-    dem_box = gpd.read_file(input_shp_fname).total_bounds
-    _, splitter_gdf = gen_splitter(dem_box, dl=0.5, overlap_ratio=0.01)
-
-    splitter_gdf.to_file(f'{outdir}/splitter.shp')
-    split_shps = split_vector_shp(input_shp_fname, splitter_gdf, outdir)
-    for split_shp in split_shps:
-        rasterize_shp(split_shp)
-    print('Done!')
-
-
-if __name__ == '__main__':
-    '''
-    Pre-process a shapfiles of polygons (e.g., NHD area polygons) by splitting it into smaller tiles,
-    and rasterizing the tiles into tif files.
-    The output tif files can be used as input for RiverMapper.
-    '''
-    SHP_FNAME = Path('/sciclone/schism10/Hgrid_projects/Waccamaw2/Shapefiles/nhdarea_waccamaw.shp')
-    sample_rasterize_polygons(SHP_FNAME)
-
-    output_dir = Path(f'{SHP_FNAME.parent}/{SHP_FNAME.stem}_dummy/')
-    create_dummy_tif(f"{output_dir}/global_dummy.tif", bounds=(-180, -90, 180, 90), pixel_size=1.0, value=0, dtype='uint8')
-
-    print('Done.')

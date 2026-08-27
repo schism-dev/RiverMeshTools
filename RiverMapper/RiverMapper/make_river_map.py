@@ -1809,7 +1809,8 @@ def make_river_map(
         pseudo_channel_width=ConfigRiverMap.DEFAULT_pseudo_channel_width,
         pseudo_channel_dl=ConfigRiverMap.DEFAULT_pseudo_channel_dl,
         nrow_pseudo_channel=ConfigRiverMap.DEFAULT_nrow_pseudo_channel,
-        dry_run_only=ConfigRiverMap.DEFAULT_dry_run_only
+        dry_run_only=ConfigRiverMap.DEFAULT_dry_run_only,
+        nhd_area_tif=ConfigRiverMap.DEFAULT_nhd_area_tif
 ):
     '''
     [Core routine for making river maps]
@@ -1844,6 +1845,9 @@ def make_river_map(
 
     | elev_scale | float | scaling factor for elevations;
     a number of -1 (invert elevations) is useful for finding ridges (e.g., of a barrier island) |
+
+    | nhd_area_tif | bool | whether tif_fnames are rasterized NHD Area polygons,
+    with 0 for land and -1 for water, rather than elevation DEMs |
 
     | outer_arc_positions | a tuple of floats | relative position of outer arcs,
     e.g., (0.1, 0.2) will add 2 outer arcs on each side of the river (4 in total), i.e.,
@@ -2030,7 +2034,6 @@ def make_river_map(
     # "keep" arcs will be processed regardless of other criteria,
     # e.g., even when the banks are not found,
     # in which case a pseudo channel will be generated
-    # Note that keep = 1 and keep = -1 are reserved for NHD
     if "keep" in thalweg_gdf.columns:
         keep = thalweg_gdf['keep'].values
         keep = np.where(np.isnan(keep), -1, keep).astype(int)  # replace NaN with -1 and convert to int
@@ -2106,9 +2109,9 @@ def make_river_map(
                 continue
 
             # set water level at each thalweg point (thalweg_eta), based on observation, simulation, estimation, etc.
-            if abs(ikeep_thalweg[i]) == 1 or elev_scale < 0:
+            if nhd_area_tif or elev_scale < 0:
                 # thalweg_eta will be set to 0 for the following cases:
-                # 1) keep = 1 is reserved for NHD, where tifs are dummy with 0 (land) and -1 (water)
+                # 1) NHD Area tifs are dummy with 0 (land) and -1 (water)
                 # 2) barrier islands (elev_scale < 0) are always nearshore, where 0.0 is a good approximation
                 thalweg_eta = 0.0 * elevs
             else:  # normal case, more sophisticated estimation for water level along thalwegs
@@ -2270,8 +2273,8 @@ def make_river_map(
             if elevs is None:
                 raise ValueError(f"{mpi_print_prefix} error: some elevs not found on thalweg {i+1} ...")
 
-            if abs(ikeep_thalweg[i]) == 1 or elev_scale < 0:
-                # keep = 1 is reserved for NHD, where tifs are dummy with 0 (land) and -1 (water)
+            if nhd_area_tif or elev_scale < 0:
+                # NHD Area tifs use 0 for land and -1 for water
                 # barrier islands (when elev_scale=-1) are always nearshore, where 0.0 is a good approximation
                 thalweg_eta = 0.0 * elevs  # set uniform water level at 0.0, same as land level
             else:  # normal case, more sophisticated methods for water level approximation
@@ -2312,8 +2315,8 @@ def make_river_map(
             elevs = get_elev_from_tiles(thalweg[:, 0], thalweg[:, 1], S_list, scale=elev_scale)
             if elevs is None:
                 raise ValueError(f"{mpi_print_prefix} error: some elevs not found on thalweg {i+1} ...")
-            if abs(ikeep_thalweg[i]) == 1 or elev_scale < 0:
-                # keep = 1 is reserved for NHD, where tifs are dummy with 0 (land) and -1 (water)
+            if nhd_area_tif or elev_scale < 0:
+                # NHD Area tifs use 0 for land and -1 for water
                 # barrier islands (when elev_scale=-1) are always nearshore, where 0.0 is a good approximation
                 thalweg_eta = 0.0 * elevs  # set uniform water level at 0.0, same as land level
             else:  # normal case, more sophisticated methods for water level approximation
@@ -2353,8 +2356,8 @@ def make_river_map(
             elevs = get_elev_from_tiles(thalweg[:, 0], thalweg[:, 1], S_list, scale=elev_scale)
             if elevs is None:
                 raise ValueError(f"{mpi_print_prefix} error: some elevs not found on thalweg {i+1} ...")
-            if abs(ikeep_thalweg[i]) == 1 or elev_scale < 0:
-                # keep = 1 is reserved for NHD, where tifs are dummy with 0 (land) and -1 (water)
+            if nhd_area_tif or elev_scale < 0:
+                # NHD Area tifs use 0 for land and -1 for water
                 # barrier islands (when elev_scale=-1) are always nearshore, where 0.0 is a good approximation
                 thalweg_eta = 0.0 * elevs  # set uniform water level at 0.0, same as land level
             else:  # normal case, more sophisticated methods for water level approximation
