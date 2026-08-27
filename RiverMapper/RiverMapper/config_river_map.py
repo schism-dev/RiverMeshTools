@@ -110,6 +110,7 @@ class ConfigRiverMap():
             'i_DiagnosticOutput': i_DiagnosticOutput,
             'i_pseudo_channel': i_pseudo_channel,
             'pseudo_channel_width': pseudo_channel_width,
+            'pseudo_channel_dl': pseudo_channel_dl,
             'nrow_pseudo_channel': nrow_pseudo_channel,
             'dry_run_only': dry_run_only,
         }
