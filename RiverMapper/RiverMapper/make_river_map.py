@@ -853,6 +853,7 @@ def get_two_banks(
     xt_left = thalweg[:, 0] + search_length * np.cos(perp + np.pi)
     yt_left = thalweg[:, 1] + search_length * np.sin(perp + np.pi)
 
+    status = 0
     for candidate_eta in thalweg_eta_candidates:
         # find two banks
         x_banks_left, y_banks_left, left_reached_limit = get_bank(
@@ -874,15 +875,12 @@ def get_two_banks(
             'warning: bank search reached its limit for all %d water-level estimates ...',
             len(thalweg_eta_candidates))
         status = -3  # no bank found before the search limit at any candidate depth
-        bank2bank_width = ((x_banks_left - x_banks_right)**2 + (y_banks_left - y_banks_right)**2)**0.5
-        return x_banks_left, y_banks_left, x_banks_right, y_banks_right, perp, bank2bank_width, status
 
     bank2bank_width = ((x_banks_left - x_banks_right)**2 + (y_banks_left - y_banks_right)**2)**0.5
 
     # deal with very small widths, temporary test, nEw
     ismall = bank2bank_width < min_width
-    status = 0
-    if sum(ismall) / len(ismall) > 0.3:
+    if status == 0 and sum(ismall) / len(ismall) > 0.3:
         status = -1  # status = -1 means narrow channel
 
     x_banks_right[ismall] = thalweg[ismall, 0] + min_width/2 * np.cos(perp[ismall])
@@ -2155,7 +2153,7 @@ def make_river_map(
                 thalweg, const_bank_width=pseudo_channel_width)
 
         # preliminary check
-        if bank_search_status in (-2, -3):
+        if bank_search_status == -2 or (bank_search_status == -3 and ikeep_thalweg[i] <= 0):
             thalweg_endpoints_width[i*2] = 0.0
             thalweg_endpoints_width[i*2+1] = 0.0
             valid_thalwegs[i] = False
@@ -2182,6 +2180,11 @@ def make_river_map(
                 )
                 valid_thalwegs[i] = False
         else:  # found banks
+            if bank_search_status == -3:
+                logger.warning(
+                    "%s warning: thalweg %d (id: %s)'s bank search exhausted all water levels; "
+                    "keep=1 retains it for correction and possible pseudo-channel fallback ...",
+                    mpi_print_prefix, i+1, thalweg_id[i])
             thalweg_widths[i] = width
             thalweg_endpoints_width[i*2] = width[0]
             thalweg_endpoints_width[i*2+1] = width[-1]
@@ -2322,7 +2325,7 @@ def make_river_map(
                 S_list, thalweg, thalweg_eta_candidates, search_length, search_steps,
                 min_width=river_threshold[0], elev_scale=elev_scale
             )
-            if bank_search_status in (-2, -3):  # failed to find banks
+            if bank_search_status == -2 or (bank_search_status == -3 and ikeep_thalweg[i] <= 0):
                 logger.warning(
                     "%s warning: banks not found for thalweg %s after redistribution, skipping ...",
                     mpi_print_prefix, i+1
@@ -2365,7 +2368,7 @@ def make_river_map(
                 min_width=river_threshold[0], elev_scale=elev_scale
             )
 
-            if bank_search_status in (-2, -3):  # failed to find banks
+            if bank_search_status == -2 or (bank_search_status == -3 and ikeep_thalweg[i] <= 0):
                 logger.warning(
                     "%s warning: banks not found for thalweg %s after correction, skipping ...",
                     mpi_print_prefix, i+1
