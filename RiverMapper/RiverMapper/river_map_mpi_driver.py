@@ -22,7 +22,7 @@ import numpy as np
 import geopandas as gpd
 
 # Application-Specific Imports
-from RiverMapper.config_logger import logger
+from RiverMapper.config_logger import configure_logger, logger
 from RiverMapper.config_river_map import ConfigRiverMap
 from RiverMapper.river_map_tif_preproc import find_thalweg_tile, Tif2XYZ
 from RiverMapper.make_river_map import make_river_map, geos2SmsArcList, clean_arcs, output_ocsmesh
@@ -31,6 +31,7 @@ from RiverMapper.util import silentremove
 
 # import warnings
 # warnings.filterwarnings("error", category=UserWarning)
+configure_logger(rank=MPI.COMM_WORLD.Get_rank())
 logger.setLevel('INFO')
 
 

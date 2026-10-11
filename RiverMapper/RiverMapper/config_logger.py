@@ -1,38 +1,35 @@
-# config_logger.py
+"""Configure serial logging; MPI callers supply their rank explicitly."""
 import os
 import logging
-from mpi4py import MPI
 
-# Initialize MPI
-comm = MPI.COMM_WORLD
-rank = comm.Get_rank()
-
-# Ensure the logs directory exists
-os.makedirs("Logs", exist_ok=True)
-
-# Create a logger
 logger = logging.getLogger('my_application_logger')
-logger.setLevel(logging.DEBUG)  # Set the root logger to the lowest level
+logger.setLevel(logging.DEBUG)
+_handlers = []
 
-# Create a console handler and set the level to INFO
-console_handler = logging.StreamHandler()
-console_handler.setLevel(logging.INFO)
 
-# Create a file handler with a file name that includes the rank and module
-file_handler = logging.FileHandler(f"Logs/RiverMapper_log_rank_{rank}.log")
-file_handler.setLevel(logging.INFO)
+def configure_logger(rank=0):
+    """Set the log filename and message prefix for a serial or MPI rank."""
+    os.makedirs("Logs", exist_ok=True)
+    formatter = logging.Formatter(
+        fmt=f'%(asctime)s - %(levelname)s - Rank {rank} - %(module)s - %(message)s',
+        datefmt='%Y-%m-%d %H:%M:%S'
+    )
+    handlers = [
+        logging.StreamHandler(),
+        logging.FileHandler(f"Logs/RiverMapper_log_rank_{rank}.log"),
+    ]
+    for handler in _handlers:
+        logger.removeHandler(handler)
+        handler.close()
+    _handlers.clear()
+    for handler in handlers:
+        handler.setLevel(logging.INFO)
+        handler.setFormatter(formatter)
+        logger.addHandler(handler)
+    _handlers.extend(handlers)
 
-# Create a formatter and set it for both handlers
-formatter = logging.Formatter(
-    fmt=f'%(asctime)s - %(levelname)s - Rank {rank} - %(module)s - %(message)s',
-    datefmt='%Y-%m-%d %H:%M:%S'
-)
-console_handler.setFormatter(formatter)
-file_handler.setFormatter(formatter)
 
-# Add both handlers to the logger
-logger.addHandler(console_handler)
-logger.addHandler(file_handler)
+configure_logger()
 
 # Set specific log levels for third-party libraries to suppress debug and info logs
 logging.getLogger('boto3').setLevel(logging.WARNING)
