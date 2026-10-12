@@ -58,3 +58,6 @@ See online documentation in the [SCHISM manual](https://schism-dev.github.io/sch
 
 [Curvature source and FID 11 spacing trials](docs/curvature_spacing_trials.md)
 records the thalweg and bank-midpoint alternatives; this work is on hold.
+
+[Piecewise pseudo-channel fallback](docs/piecewise_pseudo_channel.md) describes
+the optional blending of rough bank stretches and the FID 11 test.

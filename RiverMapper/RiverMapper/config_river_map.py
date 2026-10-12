@@ -53,6 +53,8 @@ class ConfigRiverMap():
     DEFAULT_pseudo_channel_width = 18
     DEFAULT_pseudo_channel_dl = 20
     DEFAULT_nrow_pseudo_channel = 4
+    DEFAULT_i_piecewise_pseudo_channel = False
+    DEFAULT_piecewise_pseudo_channel_ratios = (5.0, 3.0, 1.0)
     DEFAULT_dry_run_only = False
 
     def __init__(
@@ -85,6 +87,8 @@ class ConfigRiverMap():
         dry_run_only=DEFAULT_dry_run_only,
         nhd_area_tif=DEFAULT_nhd_area_tif,
         thalweg_const_depth=DEFAULT_thalweg_const_depth,
+        i_piecewise_pseudo_channel=DEFAULT_i_piecewise_pseudo_channel,
+        piecewise_pseudo_channel_ratios=DEFAULT_piecewise_pseudo_channel_ratios,
     ):
         # see a description of the parameters at the beginning of the function make_river_map() in make_river_map.py
         self.optional = {
@@ -116,6 +120,8 @@ class ConfigRiverMap():
             'pseudo_channel_dl': pseudo_channel_dl,
             'nrow_pseudo_channel': nrow_pseudo_channel,
             'dry_run_only': dry_run_only,
+            'i_piecewise_pseudo_channel': i_piecewise_pseudo_channel,
+            'piecewise_pseudo_channel_ratios': piecewise_pseudo_channel_ratios,
         }
 
     @classmethod

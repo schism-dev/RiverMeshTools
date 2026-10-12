@@ -731,6 +731,67 @@ def nudge_bank(line, perp, xs, ys, dist=None):
     return xs, ys
 
 
+def blend_pseudo_channel(thalweg, xl, yl, xr, yr, pseudo_channel_width, ratios=(5.0, 3.0, 1.0)):
+    '''Blend rough bank stretches into pseudo banks using width-scaled distances.
+
+    ratios: roughness-window width, minimum stretch length, transition length,
+    all relative to nearby low-turn bank widths. Returns banks and blend weights.
+    The roughness threshold is 0.5 radians of excess bank turning over thalweg turning.
+    '''
+    ratios = np.asarray(ratios, dtype=float)
+    if ratios.shape != (3,) or not np.all(np.isfinite(ratios)) or np.any(ratios <= 0):
+        raise ValueError('piecewise_pseudo_channel_ratios must contain three positive finite values')
+    if not np.isfinite(pseudo_channel_width) or pseudo_channel_width <= 0:
+        raise ValueError('pseudo_channel_width must be positive and finite')
+    weight = np.zeros(len(thalweg))
+    if len(thalweg) < 3:
+        return xl, yl, xr, yr, weight
+
+    def turns(points):
+        return np.abs(np.r_[0.0, get_angle_diffs(points[:, 0], points[:, 1]), 0.0])
+
+    left, right = np.c_[xl, yl], np.c_[xr, yr]
+    excess = np.maximum(np.maximum(turns(left), turns(right)) - turns(thalweg), 0.0)
+    widths = np.linalg.norm(left - right, axis=1)
+    distance = np.r_[0.0, np.cumsum(get_dist_increment(thalweg[:, :2]))]
+    if distance[-1] == 0:
+        return xl, yl, xr, yr, weight
+
+    # Estimate width through rough stretches from neighboring low-turn banks.
+    reliable = np.isfinite(widths) & (widths > pseudo_channel_width*(1+1e-6)) & (excess <= 0.5)
+    seed_width = (np.interp(distance, distance[reliable], widths[reliable]) if np.any(reliable)
+                  else np.full(len(thalweg), pseudo_channel_width))
+    local_width = seed_width.copy()
+    for i, seed in enumerate(seed_width):
+        lo, hi = np.searchsorted(distance, [distance[i] - ratios[0]*seed/2,
+                                           distance[i] + ratios[0]*seed/2])
+        samples = widths[lo:hi][reliable[lo:hi]]
+        if len(samples):
+            local_width[i] = np.median(samples)
+
+    # Integrate segment-average turning, so the window is measured in distance.
+    ds = np.diff(distance)
+    integral = np.r_[0.0, np.cumsum(ds * (excess[:-1] + excess[1:]) / 2)]
+    start = np.maximum(0.0, distance - ratios[0]*local_width/2)
+    end = np.minimum(distance[-1], distance + ratios[0]*local_width/2)
+    score = (np.interp(end, distance, integral) - np.interp(start, distance, integral)) / (end-start)
+    normalized_distance = np.r_[0.0, np.cumsum(ds * (1/local_width[:-1] + 1/local_width[1:]) / 2)]
+    edges = np.diff(np.r_[False, score > 0.5, False].astype(int))
+    for first, last in zip(np.flatnonzero(edges == 1), np.flatnonzero(edges == -1)-1):
+        if normalized_distance[last] - normalized_distance[first] < ratios[1]:
+            continue
+        ramp = np.minimum(
+            np.clip((normalized_distance-normalized_distance[first]+ratios[2])/ratios[2], 0, 1),
+            np.clip((normalized_distance[last]+ratios[2]-normalized_distance)/ratios[2], 0, 1))
+        weight = np.maximum(weight, ramp*ramp*(3-2*ramp))
+    if not np.any(weight):
+        return xl, yl, xr, yr, weight
+
+    fx_l, fy_l, fx_r, fy_r, _, _ = get_fake_banks(thalweg, const_bank_width=pseudo_channel_width)
+    return (xl*(1-weight)+fx_l*weight, yl*(1-weight)+fy_l*weight,
+            xr*(1-weight)+fx_r*weight, yr*(1-weight)+fy_r*weight, weight)
+
+
 def fill_missing_values(arr, idx):
     """
     Replace outliers in arr with linearly interpolated values,
@@ -1814,7 +1875,9 @@ def make_river_map(
         nrow_pseudo_channel=ConfigRiverMap.DEFAULT_nrow_pseudo_channel,
         dry_run_only=ConfigRiverMap.DEFAULT_dry_run_only,
         nhd_area_tif=ConfigRiverMap.DEFAULT_nhd_area_tif,
-        thalweg_const_depth=ConfigRiverMap.DEFAULT_thalweg_const_depth
+        thalweg_const_depth=ConfigRiverMap.DEFAULT_thalweg_const_depth,
+        i_piecewise_pseudo_channel=ConfigRiverMap.DEFAULT_i_piecewise_pseudo_channel,
+        piecewise_pseudo_channel_ratios=ConfigRiverMap.DEFAULT_piecewise_pseudo_channel_ratios,
 ):
     '''
     [Core routine for making river maps]
@@ -1898,6 +1961,10 @@ def make_river_map(
     | pseudo_channel_width | float | width of the pseudo channel (in meters) |
     | pseudo_channel_dl | float | along channel resolution of the pseudo channel (in meters) |
     | nrow_pseudo_channel |int| number of rows of elements in the cross-channel direction in the pseudo channel |
+    | i_piecewise_pseudo_channel | bool | opt in to pseudo banks only in sustained rough stretches;
+    requires i_pseudo_channel=2. Search-limit failures may proceed to blending, while DEM coverage and keep checks remain active |
+    | piecewise_pseudo_channel_ratios | tuple | (roughness window, minimum stretch, transition),
+    relative to nearby low-turn bank widths; default (5, 3, 1). Core width remains pseudo_channel_width |
 
     <Outputs>:
     - total_arcs.shp: a shapefile containing all river arcs
@@ -1916,6 +1983,12 @@ def make_river_map(
     else:
         require_dem = True
         endpoints_scale = 1.0  # refine near the endpoints to improve connectivity
+    if i_piecewise_pseudo_channel and i_pseudo_channel != 2:
+        raise ValueError('i_piecewise_pseudo_channel requires i_pseudo_channel=2')
+    if i_piecewise_pseudo_channel:
+        ratios = np.asarray(piecewise_pseudo_channel_ratios, dtype=float)
+        if ratios.shape != (3,) or not np.all(np.isfinite(ratios)) or np.any(ratios <= 0):
+            raise ValueError('piecewise_pseudo_channel_ratios must contain three positive finite values')
     # ------------------------- end other inputs ---------------------------
 
     # ----------------------   pre-process some inputs -------------------------
@@ -2393,7 +2466,8 @@ def make_river_map(
             )
 
             # final touch-ups
-            if bank_search_status < 0:  # degenerate case, no further touch-ups needed
+            partial_banks = i_piecewise_pseudo_channel and bank_search_status == -3
+            if bank_search_status < 0 and not partial_banks:  # degenerate case, no further touch-ups needed
                 logger.warning(
                     '\n%s warning: degenerate case during final touch-ups,'
                     '(cannot find banks or narrower than min_width)'
@@ -2455,6 +2529,13 @@ def make_river_map(
                         thalweg, x_banks_right, y_banks_right, x_banks_left, y_banks_left)
                     if thalweg is None:
                         continue
+
+                if i_piecewise_pseudo_channel:
+                    x_banks_left, y_banks_left, x_banks_right, y_banks_right, blend_weight = blend_pseudo_channel(
+                        thalweg, x_banks_left, y_banks_left, x_banks_right, y_banks_right,
+                        pseudo_channel_width, ratios=piecewise_pseudo_channel_ratios)
+                    logger.info('%s thalweg %s: piecewise pseudo banks affect %d/%d vertices',
+                                mpi_print_prefix, i+1, np.count_nonzero(blend_weight), len(blend_weight))
 
                 # update width
                 width = ((x_banks_left-x_banks_right)**2 + (y_banks_left-y_banks_right)**2)**0.5
