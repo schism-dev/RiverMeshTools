@@ -164,13 +164,14 @@ def get_pt_idx_from_tile(dem_data, lon, lat):
     return [i, j], valid
 
 
-def get_elev_from_tiles(x_cpp, y_cpp, tile_list, scale=1.0, valid_range=None):
+def get_elev_from_tiles(x_cpp, y_cpp, tile_list, scale=1.0, valid_range=None, allow_missing=False):
     '''
     x: vector of x coordinates, assuming cpp;
     y: vector of x coordinates, assuming cpp;
     tile_list: list of DEM tiles (in DemData type, defined in river_map_tif_preproc)
     scale: scale factor for elevation; use -1 to invert the elevation, e.g., for barrier islands
     valid_range: values outside valid elevation range will be set to nan
+    allow_missing: return an array containing nan for missing coverage instead of None
     '''
     if valid_range is None:
         valid_range = [-1e3, 1e3]
@@ -188,7 +189,7 @@ def get_elev_from_tiles(x_cpp, y_cpp, tile_list, scale=1.0, valid_range=None):
         # set invalid values to nan
         elevs[(elevs < valid_range[0]) | (elevs > valid_range[1])] = np.nan
 
-    if np.isnan(elevs).any():
+    if not allow_missing and np.isnan(elevs).any():
         # raise ValueError('failed to find elevation')
         return None
     else:

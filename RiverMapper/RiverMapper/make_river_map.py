@@ -731,6 +731,67 @@ def nudge_bank(line, perp, xs, ys, dist=None):
     return xs, ys
 
 
+def blend_pseudo_channel(thalweg, xl, yl, xr, yr, pseudo_channel_width, ratios=(5.0, 3.0, 1.0)):
+    '''Blend rough bank stretches into pseudo banks using width-scaled distances.
+
+    ratios: roughness-window width, minimum stretch length, transition length,
+    all relative to nearby low-turn bank widths. Returns banks and blend weights.
+    The roughness threshold is 0.5 radians of excess bank turning over thalweg turning.
+    '''
+    ratios = np.asarray(ratios, dtype=float)
+    if ratios.shape != (3,) or not np.all(np.isfinite(ratios)) or np.any(ratios <= 0):
+        raise ValueError('piecewise_pseudo_channel_ratios must contain three positive finite values')
+    if not np.isfinite(pseudo_channel_width) or pseudo_channel_width <= 0:
+        raise ValueError('pseudo_channel_width must be positive and finite')
+    weight = np.zeros(len(thalweg))
+    if len(thalweg) < 3:
+        return xl, yl, xr, yr, weight
+
+    def turns(points):
+        return np.abs(np.r_[0.0, get_angle_diffs(points[:, 0], points[:, 1]), 0.0])
+
+    left, right = np.c_[xl, yl], np.c_[xr, yr]
+    excess = np.maximum(np.maximum(turns(left), turns(right)) - turns(thalweg), 0.0)
+    widths = np.linalg.norm(left - right, axis=1)
+    distance = np.r_[0.0, np.cumsum(get_dist_increment(thalweg[:, :2]))]
+    if distance[-1] == 0:
+        return xl, yl, xr, yr, weight
+
+    # Estimate width through rough stretches from neighboring low-turn banks.
+    reliable = np.isfinite(widths) & (widths > pseudo_channel_width*(1+1e-6)) & (excess <= 0.5)
+    seed_width = (np.interp(distance, distance[reliable], widths[reliable]) if np.any(reliable)
+                  else np.full(len(thalweg), pseudo_channel_width))
+    local_width = seed_width.copy()
+    for i, seed in enumerate(seed_width):
+        lo, hi = np.searchsorted(distance, [distance[i] - ratios[0]*seed/2,
+                                           distance[i] + ratios[0]*seed/2])
+        samples = widths[lo:hi][reliable[lo:hi]]
+        if len(samples):
+            local_width[i] = np.median(samples)
+
+    # Integrate segment-average turning, so the window is measured in distance.
+    ds = np.diff(distance)
+    integral = np.r_[0.0, np.cumsum(ds * (excess[:-1] + excess[1:]) / 2)]
+    start = np.maximum(0.0, distance - ratios[0]*local_width/2)
+    end = np.minimum(distance[-1], distance + ratios[0]*local_width/2)
+    score = (np.interp(end, distance, integral) - np.interp(start, distance, integral)) / (end-start)
+    normalized_distance = np.r_[0.0, np.cumsum(ds * (1/local_width[:-1] + 1/local_width[1:]) / 2)]
+    edges = np.diff(np.r_[False, score > 0.5, False].astype(int))
+    for first, last in zip(np.flatnonzero(edges == 1), np.flatnonzero(edges == -1)-1):
+        if normalized_distance[last] - normalized_distance[first] < ratios[1]:
+            continue
+        ramp = np.minimum(
+            np.clip((normalized_distance-normalized_distance[first]+ratios[2])/ratios[2], 0, 1),
+            np.clip((normalized_distance[last]+ratios[2]-normalized_distance)/ratios[2], 0, 1))
+        weight = np.maximum(weight, ramp*ramp*(3-2*ramp))
+    if not np.any(weight):
+        return xl, yl, xr, yr, weight
+
+    fx_l, fy_l, fx_r, fy_r, _, _ = get_fake_banks(thalweg, const_bank_width=pseudo_channel_width)
+    return (xl*(1-weight)+fx_l*weight, yl*(1-weight)+fy_l*weight,
+            xr*(1-weight)+fx_r*weight, yr*(1-weight)+fy_r*weight, weight)
+
+
 def fill_missing_values(arr, idx):
     """
     Replace outliers in arr with linearly interpolated values,
@@ -769,17 +830,7 @@ def fill_missing_values(arr, idx):
     return data
 
 
-def set_eta_thalweg(x, y, z, coastal_z=None, const_depth=1.0):
-    """
-    Estimate the water surface elevation along the thalweg based on the bathymetry
-    """
-
-    if coastal_z is None:
-        coastal_z = [0.0, 3.0]
-
-    # approximation based on bathymetry
-    eta = np.zeros(x.shape, dtype=float)
-
+def _smooth_thalweg_elevations(x, y, z):
     # smooth bathymetry along thalweg because the elevation is smoother than bathymetry
     mean_dl = np.mean(get_dist_increment(np.c_[x, y]))
     z_fixed = fill_missing_values(z, np.argwhere(zscore(z) > 2)[:, 0])  # remove outliers, nEw
@@ -789,6 +840,11 @@ def set_eta_thalweg(x, y, z, coastal_z=None, const_depth=1.0):
 
     # at least 10 points average to make it smooth
     z_smooth = moving_average(z_fixed, n=int(max(100.0/(mean_dl+1e-6), 10)), self_weights=0)
+    return z_smooth
+
+
+def _estimate_eta_from_smoothed_thalweg(z_smooth, coastal_z, const_depth):
+    eta = np.zeros(z_smooth.shape, dtype=float)
 
     # coastal (deep): assume zero
     idx = z_smooth <= coastal_z[0]
@@ -810,6 +866,21 @@ def set_eta_thalweg(x, y, z, coastal_z=None, const_depth=1.0):
     return eta
 
 
+def set_eta_thalweg(
+        x, y, z, coastal_z=None, const_depth=1.0, fallback_depths=(0.5, 0.2, 0.1)):
+    """Return a list of water-level arrays, primary estimate first, then shallower fallbacks."""
+    if coastal_z is None:
+        coastal_z = [0.0, 3.0]
+
+    z_smooth = _smooth_thalweg_elevations(x, y, z)
+    candidate_depths = [const_depth]
+    candidate_depths.extend(depth for depth in fallback_depths if depth < const_depth)
+    return [
+        _estimate_eta_from_smoothed_thalweg(z_smooth, coastal_z, depth)
+        for depth in candidate_depths
+    ]
+
+
 def get_fake_banks(thalweg, const_bank_width=3.0):
     '''
     Get fake banks for the thalweg by adding a constant width on each side
@@ -824,13 +895,16 @@ def get_fake_banks(thalweg, const_bank_width=3.0):
     return x_banks_left, y_banks_left, x_banks_right, y_banks_right, perp, bank2bank_width
 
 
-def get_two_banks(S_list, thalweg, thalweg_eta, search_length, search_steps, min_width, elev_scale):
+def get_two_banks(
+        S_list, thalweg, thalweg_eta_candidates, search_length, search_steps, min_width, elev_scale):
     '''
     Get two banks for the thalweg by searching in the lateral (cross-channel) direction
-    of each point on the thalweg
+    of each point on the thalweg. Try each supplied water-level estimate until both banks
+    are found before the search limit. Returns status -3 if all estimates fail.
     '''
-    status = 0
-    range_arcs = []
+    if not thalweg_eta_candidates:
+        raise ValueError('thalweg_eta_candidates must include at least one water-level estimate')
+
     # find perpendicular direction along thalweg at each point
     perp = get_perpendicular_angle(thalweg)
 
@@ -840,28 +914,34 @@ def get_two_banks(S_list, thalweg, thalweg_eta, search_length, search_steps, min
     xt_left = thalweg[:, 0] + search_length * np.cos(perp + np.pi)
     yt_left = thalweg[:, 1] + search_length * np.sin(perp + np.pi)
 
-    # Diagnostic: save search area as SMS arcs
-    range_arcs += [
-        SMS_ARC(points=np.c_[xt_left, yt_left], src_prj='cpp'),
-        SMS_ARC(points=np.c_[xt_right, yt_right], src_prj='cpp')
-    ]
+    status = 0
+    for candidate_eta in thalweg_eta_candidates:
+        # find two banks
+        x_banks_left, y_banks_left, left_reached_limit = get_bank(
+            S_list, thalweg[:, 0], thalweg[:, 1], candidate_eta,
+            xt_left, yt_left, search_steps, elev_scale)
+        x_banks_right, y_banks_right, right_reached_limit = get_bank(
+            S_list, thalweg[:, 0], thalweg[:, 1], candidate_eta,
+            xt_right, yt_right, search_steps, elev_scale)
 
-    # find two banks
-    x_banks_left, y_banks_left = get_bank(
-        S_list, thalweg[:, 0], thalweg[:, 1], thalweg_eta, xt_left, yt_left, search_steps, elev_scale)
-    x_banks_right, y_banks_right = get_bank(
-        S_list, thalweg[:, 0], thalweg[:, 1], thalweg_eta, xt_right, yt_right, search_steps, elev_scale)
+        if x_banks_left is None or x_banks_right is None:
+            logger.warning('warning: elev value is None, out of coverage ... ')
+            status = -2  # status = -2 means DEM bank-search coverage failure
+            return None, None, None, None, None, None, status
 
-    if x_banks_left is None or x_banks_right is None:
-        logger.warning('warning: elev value is None, out of coverage ... ')
-        status = -2  # status = -2 means bank search failure
-        return None, None, None, None, None, None, status
+        if not np.any(left_reached_limit) and not np.any(right_reached_limit):
+            break
+    else:
+        logger.warning(
+            'warning: bank search reached its limit for all %d water-level estimates ...',
+            len(thalweg_eta_candidates))
+        status = -3  # no bank found before the search limit at any candidate depth
 
     bank2bank_width = ((x_banks_left - x_banks_right)**2 + (y_banks_left - y_banks_right)**2)**0.5
 
     # deal with very small widths, temporary test, nEw
     ismall = bank2bank_width < min_width
-    if sum(ismall) / len(ismall) > 0.3:
+    if status == 0 and sum(ismall) / len(ismall) > 0.3:
         status = -1  # status = -1 means narrow channel
 
     x_banks_right[ismall] = thalweg[ismall, 0] + min_width/2 * np.cos(perp[ismall])
@@ -1672,7 +1752,8 @@ def generate_river_outline_polys(river_arcs=None):
 def correct_thalwegs(S_list, dl, line, search_length, perp, mpi_print_prefix, elev_scale=1.0):
     '''
     Correct thalwegs by relocating each thalweg vertex to
-    the lowest elevation along the cross-channel transect.
+    the median index of up to 10 lowest elevations on each covered transect.
+    Stop at the first coverage gap; retain vertices without a usable candidate.
     '''
     i_corrected = False
 
@@ -1688,51 +1769,25 @@ def correct_thalwegs(S_list, dl, line, search_length, perp, mpi_print_prefix, el
     # give it at least something to search for, i.e., the length of 5 grid points
     __search_steps = max(5, __search_steps)
 
-    x_new = np.full((len(x), 2), np.nan, dtype=float)
-    y_new = np.full((len(x), 2), np.nan, dtype=float)
-    # initialized to a large number because we want to find the minimum
-    elev_new = np.ones((len(x), 2), dtype=float) * 9999
-    thalweg_idx = np.ones(xt_right.shape) * 9999
+    x_new = np.tile(x[:, None], (1, 2)).astype(float)
+    y_new = np.tile(y[:, None], (1, 2)).astype(float)
+    elev_new = np.full((len(x), 2), np.inf)
     for k, [xt, yt] in enumerate([[xt_left, yt_left], [xt_right, yt_right]]):
         xts = np.linspace(x, xt, __search_steps, axis=1)
         yts = np.linspace(y, yt, __search_steps, axis=1)
 
-        elevs = get_elev_from_tiles(xts, yts, S_list, scale=elev_scale)
-        if elevs is None:
-            continue
-
-        # elevs is well defined for the rest of the loop if we reach here
-        if np.isnan(elevs).any():
-            logger.warning(
-                '%s Warning: nan found in elevs when trying to improve Thalweg: %s',
-                mpi_print_prefix, np.c_[x, y])
-            continue  # aborting thalweg correction for this vertex
-
-        if elevs.shape[1] < 2:
-            logger.warning(
-                '%s Warning: elevs shape[1] < 2,'
-                'not enough valid elevations when trying to improve Thalweg: %s',
-                mpi_print_prefix, np.c_[x, y])
-            continue  # aborting thalweg correction for this vertex
-
-        # instead of using the minimum, use the median of
-        # the lowest 10 elevations to avoid the noise in bathymetry
-        n_low = min(10, elevs.shape[1]-1)
-        low = np.argpartition(elevs, n_low, axis=1)
-        thalweg_idx = np.median(low[:, :n_low], axis=1).astype(int)
-
-        if any(thalweg_idx < 0) or any(thalweg_idx >= xts.shape[1]):
-            logger.warning(
-                '%s Warning: invalid thalweg index after improvement: %s',
-                mpi_print_prefix, np.c_[x, y])
-            continue  # aborting thalweg improvement
-
-        x_new[:, k] = xts[range(len(x)), thalweg_idx]
-        y_new[:, k] = yts[range(len(x)), thalweg_idx]
-        elev_new[:, k] = elevs[range(len(x)), thalweg_idx]
-
-        # correction successful if this point is reached
-        i_corrected = True
+        elevs = get_elev_from_tiles(xts, yts, S_list, scale=elev_scale, allow_missing=True)
+        valid = np.logical_and.accumulate(np.isfinite(elevs), axis=1)
+        for vertex, count in enumerate(np.sum(valid, axis=1)):
+            if count < 2:
+                continue
+            n_low = min(count, 10)
+            low = np.argpartition(elevs[vertex, :count], n_low - 1)[:n_low]
+            thalweg_idx = int(np.median(low))
+            x_new[vertex, k] = xts[vertex, thalweg_idx]
+            y_new[vertex, k] = yts[vertex, thalweg_idx]
+            elev_new[vertex, k] = elevs[vertex, thalweg_idx]
+            i_corrected = True
 
     left_or_right = elev_new[:, 0] > elev_new[:, 1]
     x_real = x_new[range(len(x)), left_or_right.astype(int)]  # if left higher than right, then use right
@@ -1747,6 +1802,10 @@ def get_bank(S_list, x, y, thalweg_eta, xt, yt, search_steps=100, elev_scale=1.0
     Inputs:
         x, y, eta along a thalweg
         parameter deciding the search area: search_stps
+    Returns:
+        bank coordinates and a mask of points where the search remained underwater
+        through the search limit or the first gap in DEM coverage. Missing elevation
+        at the thalweg itself remains a coverage failure.
     '''
 
     # form a search area between the thalweg and the search limit
@@ -1757,21 +1816,26 @@ def get_bank(S_list, x, y, thalweg_eta, xt, yt, search_steps=100, elev_scale=1.0
     eta_stream = np.tile(thalweg_eta.reshape(-1, 1), (1, search_steps))
 
     # ground elevations of the search area
-    elevs = get_elev_from_tiles(xts, yts, S_list, scale=elev_scale)
-    if elevs is None:
-        return None, None  # return None for the bank
+    elevs = get_elev_from_tiles(xts, yts, S_list, scale=elev_scale, allow_missing=True)
+    valid = np.isfinite(elevs)
+    if not np.all(valid[:, 0]):
+        return None, None, None  # return None for the bank
 
-    # elevs is well defined if this step is reached
+    # A ray cannot cross a gap to use disconnected terrain farther away.
+    valid = np.logical_and.accumulate(valid, axis=1)
+    last_valid = np.sum(valid, axis=1) - 1
     d_eta = elevs - eta_stream  # closeness to target depth, negative means under water
 
-    bank_idx = np.argmax(d_eta >= 0, axis=1)
+    land = valid & (d_eta >= 0)
+    bank_idx = np.argmax(land, axis=1)
 
     invalid = bank_idx == 0  # thalweg is bank, meaning the width is very narrow
-    bank_idx[invalid] = np.argmin(abs(d_eta[invalid, :]), axis=1)
+    eta_distance = np.where(valid[invalid, :], abs(d_eta[invalid, :]), np.inf)
+    bank_idx[invalid] = np.argmin(eta_distance, axis=1)
 
     # special case: all water, not reaching land
-    all_water = np.all(d_eta < 0, axis=1)
-    bank_idx[all_water] = search_steps - 1  # last point, as wide as possible
+    all_water = ~np.any(land, axis=1)
+    bank_idx[all_water] = last_valid[all_water]
 
     # R_sort_idx = np.argsort(d_eta)
     # bank_idx = np.min(R_sort_idx[:, :min(search_steps, search_tolerance)], axis=1) # search_tolerance=5
@@ -1779,7 +1843,7 @@ def get_bank(S_list, x, y, thalweg_eta, xt, yt, search_steps=100, elev_scale=1.0
     x_banks = xts[range(len(x)), bank_idx]
     y_banks = yts[range(len(x)), bank_idx]
 
-    return x_banks, y_banks
+    return x_banks, y_banks, all_water
 
 
 def make_river_map(
@@ -1810,13 +1874,17 @@ def make_river_map(
         pseudo_channel_dl=ConfigRiverMap.DEFAULT_pseudo_channel_dl,
         nrow_pseudo_channel=ConfigRiverMap.DEFAULT_nrow_pseudo_channel,
         dry_run_only=ConfigRiverMap.DEFAULT_dry_run_only,
-        nhd_area_tif=ConfigRiverMap.DEFAULT_nhd_area_tif
+        nhd_area_tif=ConfigRiverMap.DEFAULT_nhd_area_tif,
+        thalweg_const_depth=ConfigRiverMap.DEFAULT_thalweg_const_depth,
+        i_piecewise_pseudo_channel=ConfigRiverMap.DEFAULT_i_piecewise_pseudo_channel,
+        piecewise_pseudo_channel_ratios=ConfigRiverMap.DEFAULT_piecewise_pseudo_channel_ratios,
 ):
     '''
     [Core routine for making river maps]
     <Mandatory Inputs>:
     | tif_fnames (or a json file to specify file names if there are many tiles) | a list of TIF file names.
-    These TIFs should cover the area of interest and be arranged by priority (higher priority ones in front) |
+    These TIFs should cover the area of interest and be arranged by priority (higher priority ones in front).
+    All thalweg vertices must have valid elevations; lateral bank searches stop at the first gap in coverage |
 
     | thalweg_shp_fname | name of a polyline shapefile containing the thalwegs |
     Additional notes on the thalweg shapefile for special use cases:
@@ -1845,6 +1913,10 @@ def make_river_map(
 
     | elev_scale | float | scaling factor for elevations;
     a number of -1 (invert elevations) is useful for finding ridges (e.g., of a barrier island) |
+
+    | thalweg_const_depth | float | assumed depth (in meters) above the smoothed thalweg elevation
+    when estimating water level in DEM-based bank searches; defaults to 1.0. If a bank search
+    reaches its limit, shallower depths of 0.5, 0.2, and 0.1 m are tried in order |
 
     | nhd_area_tif | bool | whether tif_fnames are rasterized NHD Area polygons,
     with 0 for land and -1 for water, rather than elevation DEMs |
@@ -1889,6 +1961,10 @@ def make_river_map(
     | pseudo_channel_width | float | width of the pseudo channel (in meters) |
     | pseudo_channel_dl | float | along channel resolution of the pseudo channel (in meters) |
     | nrow_pseudo_channel |int| number of rows of elements in the cross-channel direction in the pseudo channel |
+    | i_piecewise_pseudo_channel | bool | opt in to pseudo banks only in sustained rough stretches;
+    requires i_pseudo_channel=2. Search-limit failures may proceed to blending, while DEM coverage and keep checks remain active |
+    | piecewise_pseudo_channel_ratios | tuple | (roughness window, minimum stretch, transition),
+    relative to nearby low-turn bank widths; default (5, 3, 1). Core width remains pseudo_channel_width |
 
     <Outputs>:
     - total_arcs.shp: a shapefile containing all river arcs
@@ -1907,6 +1983,12 @@ def make_river_map(
     else:
         require_dem = True
         endpoints_scale = 1.0  # refine near the endpoints to improve connectivity
+    if i_piecewise_pseudo_channel and i_pseudo_channel != 2:
+        raise ValueError('i_piecewise_pseudo_channel requires i_pseudo_channel=2')
+    if i_piecewise_pseudo_channel:
+        ratios = np.asarray(piecewise_pseudo_channel_ratios, dtype=float)
+        if ratios.shape != (3,) or not np.all(np.isfinite(ratios)) or np.any(ratios <= 0):
+            raise ValueError('piecewise_pseudo_channel_ratios must contain three positive finite values')
     # ------------------------- end other inputs ---------------------------
 
     # ----------------------   pre-process some inputs -------------------------
@@ -2098,7 +2180,7 @@ def make_river_map(
         if idummy_thalweg[i] == 1:
             continue  # still a valid thalweg, to be preserved as is (i.e., no bank search needed)
 
-        bank_search_status = 0  # intialized to 0 (success); -1: narrower than min width; -2: not found
+        bank_search_status = 0  # 0: success; -1: narrow channel; -2: DEM coverage; -3: banks not found
         if require_dem:
             elevs = get_elev_from_tiles(thalweg[:, 0], thalweg[:, 1], S_list, scale=elev_scale)
             if elevs is None:
@@ -2108,28 +2190,35 @@ def make_river_map(
                 valid_thalwegs[i] = False
                 continue
 
-            # set water level at each thalweg point (thalweg_eta), based on observation, simulation, estimation, etc.
+            # Set primary and fallback water levels along the thalweg.
             if nhd_area_tif or elev_scale < 0:
                 # thalweg_eta will be set to 0 for the following cases:
                 # 1) NHD Area tifs are dummy with 0 (land) and -1 (water)
                 # 2) barrier islands (elev_scale < 0) are always nearshore, where 0.0 is a good approximation
-                thalweg_eta = 0.0 * elevs
+                thalweg_eta_candidates = [0.0 * elevs]
             else:  # normal case, more sophisticated estimation for water level along thalwegs
-                thalweg_eta = set_eta_thalweg(thalweg[:, 0], thalweg[:, 1], elevs)
+                thalweg_eta_candidates = set_eta_thalweg(
+                    thalweg[:, 0], thalweg[:, 1], elevs, const_depth=thalweg_const_depth)
 
             x_banks_left, y_banks_left, x_banks_right, y_banks_right, _, width, bank_search_status = get_two_banks(
-                S_list, thalweg, thalweg_eta, search_length, search_steps,
+                S_list, thalweg, thalweg_eta_candidates, search_length, search_steps,
                 min_width=river_threshold[0], elev_scale=elev_scale)
         else:
             x_banks_left, y_banks_left, x_banks_right, y_banks_right, _, width = get_fake_banks(
                 thalweg, const_bank_width=pseudo_channel_width)
 
         # preliminary check
-        if bank_search_status == -2:
+        if bank_search_status == -2 or (bank_search_status == -3 and ikeep_thalweg[i] <= 0):
             thalweg_endpoints_width[i*2] = 0.0
             thalweg_endpoints_width[i*2+1] = 0.0
             valid_thalwegs[i] = False
-            logger.warning("%s warning: thalweg %d out of DEM coverage, discarding ...", mpi_print_prefix, i+1)
+            if bank_search_status == -2:
+                logger.warning(
+                    "%s warning: thalweg %d out of DEM coverage, discarding ...", mpi_print_prefix, i+1)
+            else:
+                logger.warning(
+                    "%s warning: thalweg %d has no banks within the search limit at any depth, discarding ...",
+                    mpi_print_prefix, i+1)
         elif bank_search_status == -1:  # narrower than min width
             thalweg_widths[i] = pseudo_channel_width
             thalweg_endpoints_width[i*2] = pseudo_channel_width
@@ -2146,6 +2235,11 @@ def make_river_map(
                 )
                 valid_thalwegs[i] = False
         else:  # found banks
+            if bank_search_status == -3:
+                logger.warning(
+                    "%s warning: thalweg %d (id: %s)'s bank search exhausted all water levels; "
+                    "keep=1 retains it for correction and possible pseudo-channel fallback ...",
+                    mpi_print_prefix, i+1, thalweg_id[i])
             thalweg_widths[i] = width
             thalweg_endpoints_width[i*2] = width[0]
             thalweg_endpoints_width[i*2+1] = width[-1]
@@ -2276,16 +2370,17 @@ def make_river_map(
             if nhd_area_tif or elev_scale < 0:
                 # NHD Area tifs use 0 for land and -1 for water
                 # barrier islands (when elev_scale=-1) are always nearshore, where 0.0 is a good approximation
-                thalweg_eta = 0.0 * elevs  # set uniform water level at 0.0, same as land level
+                thalweg_eta_candidates = [0.0 * elevs]  # set uniform water level at 0.0, same as land level
             else:  # normal case, more sophisticated methods for water level approximation
-                thalweg_eta = set_eta_thalweg(thalweg[:, 0], thalweg[:, 1], elevs)
+                thalweg_eta_candidates = set_eta_thalweg(
+                    thalweg[:, 0], thalweg[:, 1], elevs, const_depth=thalweg_const_depth)
 
             # re-make banks based on redistributed thalweg
             x_banks_left, y_banks_left, x_banks_right, y_banks_right, perp, width, bank_search_status = get_two_banks(
-                S_list, thalweg, thalweg_eta, search_length, search_steps,
+                S_list, thalweg, thalweg_eta_candidates, search_length, search_steps,
                 min_width=river_threshold[0], elev_scale=elev_scale
             )
-            if bank_search_status == -2:  # failed to find banks
+            if bank_search_status == -2 or (bank_search_status == -3 and ikeep_thalweg[i] <= 0):
                 logger.warning(
                     "%s warning: banks not found for thalweg %s after redistribution, skipping ...",
                     mpi_print_prefix, i+1
@@ -2318,16 +2413,17 @@ def make_river_map(
             if nhd_area_tif or elev_scale < 0:
                 # NHD Area tifs use 0 for land and -1 for water
                 # barrier islands (when elev_scale=-1) are always nearshore, where 0.0 is a good approximation
-                thalweg_eta = 0.0 * elevs  # set uniform water level at 0.0, same as land level
+                thalweg_eta_candidates = [0.0 * elevs]  # set uniform water level at 0.0, same as land level
             else:  # normal case, more sophisticated methods for water level approximation
-                thalweg_eta = set_eta_thalweg(thalweg[:, 0], thalweg[:, 1], elevs)
+                thalweg_eta_candidates = set_eta_thalweg(
+                    thalweg[:, 0], thalweg[:, 1], elevs, const_depth=thalweg_const_depth)
             # re-make banks based on corrected thalweg
             x_banks_left, y_banks_left, x_banks_right, y_banks_right, perp, width, bank_search_status = get_two_banks(
-                S_list, thalweg, thalweg_eta, search_length, search_steps,
+                S_list, thalweg, thalweg_eta_candidates, search_length, search_steps,
                 min_width=river_threshold[0], elev_scale=elev_scale
             )
 
-            if bank_search_status == -2:  # failed to find banks
+            if bank_search_status == -2 or (bank_search_status == -3 and ikeep_thalweg[i] <= 0):
                 logger.warning(
                     "%s warning: banks not found for thalweg %s after correction, skipping ...",
                     mpi_print_prefix, i+1
@@ -2359,17 +2455,19 @@ def make_river_map(
             if nhd_area_tif or elev_scale < 0:
                 # NHD Area tifs use 0 for land and -1 for water
                 # barrier islands (when elev_scale=-1) are always nearshore, where 0.0 is a good approximation
-                thalweg_eta = 0.0 * elevs  # set uniform water level at 0.0, same as land level
+                thalweg_eta_candidates = [0.0 * elevs]  # set uniform water level at 0.0, same as land level
             else:  # normal case, more sophisticated methods for water level approximation
-                thalweg_eta = set_eta_thalweg(thalweg[:, 0], thalweg[:, 1], elevs)
+                thalweg_eta_candidates = set_eta_thalweg(
+                    thalweg[:, 0], thalweg[:, 1], elevs, const_depth=thalweg_const_depth)
             # re-make banks based on redistributed thalweg
             x_banks_left, y_banks_left, x_banks_right, y_banks_right, perp, width, bank_search_status = get_two_banks(
-                S_list, thalweg, thalweg_eta, search_length, search_steps,
+                S_list, thalweg, thalweg_eta_candidates, search_length, search_steps,
                 min_width=river_threshold[0], elev_scale=elev_scale
             )
 
             # final touch-ups
-            if bank_search_status < 0:  # degenerate case, no further touch-ups needed
+            partial_banks = i_piecewise_pseudo_channel and bank_search_status == -3
+            if bank_search_status < 0 and not partial_banks:  # degenerate case, no further touch-ups needed
                 logger.warning(
                     '\n%s warning: degenerate case during final touch-ups,'
                     '(cannot find banks or narrower than min_width)'
@@ -2431,6 +2529,13 @@ def make_river_map(
                         thalweg, x_banks_right, y_banks_right, x_banks_left, y_banks_left)
                     if thalweg is None:
                         continue
+
+                if i_piecewise_pseudo_channel:
+                    x_banks_left, y_banks_left, x_banks_right, y_banks_right, blend_weight = blend_pseudo_channel(
+                        thalweg, x_banks_left, y_banks_left, x_banks_right, y_banks_right,
+                        pseudo_channel_width, ratios=piecewise_pseudo_channel_ratios)
+                    logger.info('%s thalweg %s: piecewise pseudo banks affect %d/%d vertices',
+                                mpi_print_prefix, i+1, np.count_nonzero(blend_weight), len(blend_weight))
 
                 # update width
                 width = ((x_banks_left-x_banks_right)**2 + (y_banks_left-y_banks_right)**2)**0.5
