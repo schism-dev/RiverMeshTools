@@ -1691,7 +1691,8 @@ def generate_river_outline_polys(river_arcs=None):
 def correct_thalwegs(S_list, dl, line, search_length, perp, mpi_print_prefix, elev_scale=1.0):
     '''
     Correct thalwegs by relocating each thalweg vertex to
-    the lowest elevation along the cross-channel transect.
+    the median index of up to 10 lowest elevations on each covered transect.
+    Stop at the first coverage gap; retain vertices without a usable candidate.
     '''
     i_corrected = False
 
@@ -1707,51 +1708,25 @@ def correct_thalwegs(S_list, dl, line, search_length, perp, mpi_print_prefix, el
     # give it at least something to search for, i.e., the length of 5 grid points
     __search_steps = max(5, __search_steps)
 
-    x_new = np.full((len(x), 2), np.nan, dtype=float)
-    y_new = np.full((len(x), 2), np.nan, dtype=float)
-    # initialized to a large number because we want to find the minimum
-    elev_new = np.ones((len(x), 2), dtype=float) * 9999
-    thalweg_idx = np.ones(xt_right.shape) * 9999
+    x_new = np.tile(x[:, None], (1, 2)).astype(float)
+    y_new = np.tile(y[:, None], (1, 2)).astype(float)
+    elev_new = np.full((len(x), 2), np.inf)
     for k, [xt, yt] in enumerate([[xt_left, yt_left], [xt_right, yt_right]]):
         xts = np.linspace(x, xt, __search_steps, axis=1)
         yts = np.linspace(y, yt, __search_steps, axis=1)
 
-        elevs = get_elev_from_tiles(xts, yts, S_list, scale=elev_scale)
-        if elevs is None:
-            continue
-
-        # elevs is well defined for the rest of the loop if we reach here
-        if np.isnan(elevs).any():
-            logger.warning(
-                '%s Warning: nan found in elevs when trying to improve Thalweg: %s',
-                mpi_print_prefix, np.c_[x, y])
-            continue  # aborting thalweg correction for this vertex
-
-        if elevs.shape[1] < 2:
-            logger.warning(
-                '%s Warning: elevs shape[1] < 2,'
-                'not enough valid elevations when trying to improve Thalweg: %s',
-                mpi_print_prefix, np.c_[x, y])
-            continue  # aborting thalweg correction for this vertex
-
-        # instead of using the minimum, use the median of
-        # the lowest 10 elevations to avoid the noise in bathymetry
-        n_low = min(10, elevs.shape[1]-1)
-        low = np.argpartition(elevs, n_low, axis=1)
-        thalweg_idx = np.median(low[:, :n_low], axis=1).astype(int)
-
-        if any(thalweg_idx < 0) or any(thalweg_idx >= xts.shape[1]):
-            logger.warning(
-                '%s Warning: invalid thalweg index after improvement: %s',
-                mpi_print_prefix, np.c_[x, y])
-            continue  # aborting thalweg improvement
-
-        x_new[:, k] = xts[range(len(x)), thalweg_idx]
-        y_new[:, k] = yts[range(len(x)), thalweg_idx]
-        elev_new[:, k] = elevs[range(len(x)), thalweg_idx]
-
-        # correction successful if this point is reached
-        i_corrected = True
+        elevs = get_elev_from_tiles(xts, yts, S_list, scale=elev_scale, allow_missing=True)
+        valid = np.logical_and.accumulate(np.isfinite(elevs), axis=1)
+        for vertex, count in enumerate(np.sum(valid, axis=1)):
+            if count < 2:
+                continue
+            n_low = min(count, 10)
+            low = np.argpartition(elevs[vertex, :count], n_low - 1)[:n_low]
+            thalweg_idx = int(np.median(low))
+            x_new[vertex, k] = xts[vertex, thalweg_idx]
+            y_new[vertex, k] = yts[vertex, thalweg_idx]
+            elev_new[vertex, k] = elevs[vertex, thalweg_idx]
+            i_corrected = True
 
     left_or_right = elev_new[:, 0] > elev_new[:, 1]
     x_real = x_new[range(len(x)), left_or_right.astype(int)]  # if left higher than right, then use right
@@ -1768,7 +1743,8 @@ def get_bank(S_list, x, y, thalweg_eta, xt, yt, search_steps=100, elev_scale=1.0
         parameter deciding the search area: search_stps
     Returns:
         bank coordinates and a mask of points where the search remained underwater
-        through the search limit
+        through the search limit or the first gap in DEM coverage. Missing elevation
+        at the thalweg itself remains a coverage failure.
     '''
 
     # form a search area between the thalweg and the search limit
@@ -1779,21 +1755,26 @@ def get_bank(S_list, x, y, thalweg_eta, xt, yt, search_steps=100, elev_scale=1.0
     eta_stream = np.tile(thalweg_eta.reshape(-1, 1), (1, search_steps))
 
     # ground elevations of the search area
-    elevs = get_elev_from_tiles(xts, yts, S_list, scale=elev_scale)
-    if elevs is None:
+    elevs = get_elev_from_tiles(xts, yts, S_list, scale=elev_scale, allow_missing=True)
+    valid = np.isfinite(elevs)
+    if not np.all(valid[:, 0]):
         return None, None, None  # return None for the bank
 
-    # elevs is well defined if this step is reached
+    # A ray cannot cross a gap to use disconnected terrain farther away.
+    valid = np.logical_and.accumulate(valid, axis=1)
+    last_valid = np.sum(valid, axis=1) - 1
     d_eta = elevs - eta_stream  # closeness to target depth, negative means under water
 
-    bank_idx = np.argmax(d_eta >= 0, axis=1)
+    land = valid & (d_eta >= 0)
+    bank_idx = np.argmax(land, axis=1)
 
     invalid = bank_idx == 0  # thalweg is bank, meaning the width is very narrow
-    bank_idx[invalid] = np.argmin(abs(d_eta[invalid, :]), axis=1)
+    eta_distance = np.where(valid[invalid, :], abs(d_eta[invalid, :]), np.inf)
+    bank_idx[invalid] = np.argmin(eta_distance, axis=1)
 
     # special case: all water, not reaching land
-    all_water = np.all(d_eta < 0, axis=1)
-    bank_idx[all_water] = search_steps - 1  # last point, as wide as possible
+    all_water = ~np.any(land, axis=1)
+    bank_idx[all_water] = last_valid[all_water]
 
     # R_sort_idx = np.argsort(d_eta)
     # bank_idx = np.min(R_sort_idx[:, :min(search_steps, search_tolerance)], axis=1) # search_tolerance=5
@@ -1839,7 +1820,8 @@ def make_river_map(
     [Core routine for making river maps]
     <Mandatory Inputs>:
     | tif_fnames (or a json file to specify file names if there are many tiles) | a list of TIF file names.
-    These TIFs should cover the area of interest and be arranged by priority (higher priority ones in front) |
+    These TIFs should cover the area of interest and be arranged by priority (higher priority ones in front).
+    All thalweg vertices must have valid elevations; lateral bank searches stop at the first gap in coverage |
 
     | thalweg_shp_fname | name of a polyline shapefile containing the thalwegs |
     Additional notes on the thalweg shapefile for special use cases:

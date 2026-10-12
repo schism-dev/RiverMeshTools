@@ -53,3 +53,8 @@ to extract files from RiverMapper_Samples.tar.
 
 ## Tutorial
 See online documentation in the [SCHISM manual](https://schism-dev.github.io/schism/master/mesh-generation/meshing-for-compound-floods/generate-river-map.html) for more information.
+
+## Development notes
+
+[Curvature source and FID 11 spacing trials](docs/curvature_spacing_trials.md)
+records the thalweg and bank-midpoint alternatives; this work is on hold.
