@@ -1,8 +1,38 @@
 # Piecewise pseudo-channel fallback
 
+## Integration status
+
+Merged into `main` on 2026-10-12 as `be1d483` from
+`feature/shallow-river-depth-param`. The feature branch remains available for
+comparison. The two latest feature commits are:
+
+- `9213b5d`: partial lateral DEM coverage, thalweg-correction fixes, focused tests,
+  and documentation of the paused curvature trials.
+- `1b8c7c2`: optional piecewise pseudo-channel fallback, focused tests, and usage
+  documentation.
+
+The merge also includes the earlier shallow-depth retries and handling of kept
+thalwegs after bank-search failures. Merging does not enable the piecewise
+option automatically.
+
+To compare the piecewise change with its preceding commit, run from the
+`RiverMapper` project directory:
+
+```bash
+git diff --stat 9213b5d 1b8c7c2
+git diff 9213b5d 1b8c7c2 -- \
+  README.md \
+  RiverMapper/config_river_map.py \
+  RiverMapper/make_river_map.py \
+  RiverMapper/Tests/test_piecewise_pseudo_channel.py \
+  docs/piecewise_pseudo_channel.md
+```
+
 ## Enable the option
 
 ```python
+from RiverMapper.config_river_map import ConfigRiverMap
+
 config = ConfigRiverMap(
     i_pseudo_channel=2,
     i_piecewise_pseudo_channel=True,
@@ -16,6 +46,21 @@ The same keyword arguments can be passed directly to `make_river_map`.
 The option defaults to **disabled** and requires `i_pseudo_channel=2`.
 Curvature-based thalweg redistribution is unchanged; the curvature-source trials
 remain [on hold](curvature_spacing_trials.md).
+
+For the direct call in `chinook/process_CRE.py`, add these arguments to the
+existing `make_river_map` call:
+
+```python
+i_piecewise_pseudo_channel=True,
+piecewise_pseudo_channel_ratios=(5, 3, 1),
+```
+
+Keep the existing `pseudo_channel_width=5` and `pseudo_channel_dl=30` settings.
+`pseudo_channel_dl` continues to govern whole-line pseudo redistribution; it
+does not set the width-scaled piecewise selection window or transition length.
+The script inspected on 2026-10-12 omitted `i_piecewise_pseudo_channel`, so its
+full run used the disabled setting and retained FID 11 as a whole-line pseudo
+channel. The enabled FID 11 test used the flag explicitly.
 
 ## Selection and blending
 
@@ -46,6 +91,11 @@ count. The transitions use smoothstep weights `r*r*(3-2*r)`; overlapping weights
 are combined by taking their maximum. All ratios must be positive and finite.
 Distances and widths use RiverMapper's CPP coordinates.
 
+When the option is enabled, a tuple with the wrong length, nonpositive values,
+NaN, or infinity raises `ValueError`. This is configuration validation before
+processing, not a per-linestring rejection or a response to difficult terrain.
+The default `(5, 3, 1)` is valid.
+
 Selected cores use fake banks of exactly `pseudo_channel_width` around the
 existing thalweg. Transition points blend the real and fake banks. Banks at
 zero-weight vertices are unchanged. No new thalweg vertices are added or moved
@@ -68,6 +118,31 @@ The final river-arc quality check also retains its whole-line pseudo fallback.
 Because the selector measures geometry, a search-limit failure by itself does
 not force a local pseudo stretch. Smooth bank-search endpoints can remain as
 real-bank estimates. Use the opt-in setting where that behavior is appropriate.
+
+### Full chinook run: missing thalweg coverage
+
+The 2026-10-12 12:09 run of `process_CRE.py` rejected 41 of 735 input features,
+leaving 694 in `Outputs/valid_thalwegs.shp`. These were exactly the same FIDs
+rejected by the preceding full run on 2026-10-11 at 20:01. All rejections were
+caused by missing DEM elevations on the original thalweg; they were not new
+piecewise-fallback exclusions. All input features had `keep=1`.
+
+The rejected coordinates are within the TIFF's rectangular bounds but encounter
+NoData in its valid-data footprint. Seventeen features have no valid sampled
+thalweg elevations; 24 have partial coverage. FIDs 487, 518, and 627 each have
+NoData at only their first two vertices:
+
+| FID (zero-based) | Total vertices | Missing vertices |
+|---|---:|---:|
+| 487 | 941 | 2 |
+| 518 | 67 | 2 |
+| 627 | 24 | 2 |
+
+Those samples were checked directly against the TIFF and matched its NoData
+sentinel and cached DEM. An endpoint repair for these cases has not been
+implemented. The complete-thalweg-coverage requirement still applies, even with
+`keep=1`. FID 11 differs because its original thalweg has complete coverage;
+its earlier coverage problem occurred along lateral bank-search rays.
 
 ## FID 11 test
 

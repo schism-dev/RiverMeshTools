@@ -60,4 +60,5 @@ See online documentation in the [SCHISM manual](https://schism-dev.github.io/sch
 records the thalweg and bank-midpoint alternatives; this work is on hold.
 
 [Piecewise pseudo-channel fallback](docs/piecewise_pseudo_channel.md) describes
-the optional blending of rough bank stretches and the FID 11 test.
+the optional blending of rough bank stretches, enabling it in a processing
+script, the FID 11 test, DEM-coverage exclusions, and its integration into `main`.
